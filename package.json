@@ -81,6 +81,7 @@
 	},
 	"packageManager": "pnpm@10.10.0",
 	"dependencies": {
-		"jszip": "^3.10.1"
+		"jszip": "^3.10.1",
+		"tesseract.js": "^7.0.0"
 	}
 }

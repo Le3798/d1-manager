@@ -1,13 +1,19 @@
 <script>
   import { createWorker } from 'tesseract.js';
+  import { pipeline } from '@xenova/transformers';
   import { onDestroy, onMount } from 'svelte';
 
   let fileInput;
-  let status = "Ready";
+  let statusMsg = "Ready"; // Renamed from 'status'
   let resultText = "";
   let confidence = 0;
   let isProcessing = false;
   let worker = null;
+
+  // Translation variables
+  let translator = null;
+  let isTranslatorLoading = false;
+  let translation = "";
 
   // Canvas variables
   let canvas;
@@ -18,7 +24,6 @@
   let selection = null;
 
   onMount(() => {
-    // Initialize context once mounted
     if (canvas) {
         ctx = canvas.getContext('2d');
     }
@@ -28,6 +33,23 @@
     if (worker) await worker.terminate();
   });
 
+  // --- Translation Loader ---
+  async function loadTranslator() {
+    if (translator) return;
+    isTranslatorLoading = true;
+    statusMsg = "Downloading translation model (happens once)...";
+    
+    try {
+      translator = await pipeline('translation', 'Xenova/opus-mt-de-en');
+      statusMsg = "Translator ready!";
+    } catch (err) {
+      console.error(err);
+      statusMsg = "❌ Failed to load translator";
+    } finally {
+      isTranslatorLoading = false;
+    }
+  }
+
   function handleFileSelect(e) {
     const file = e.target.files[0];
     if (file) {
@@ -35,27 +57,20 @@
       
       imgObj = new Image();
       imgObj.onload = () => {
-        // 1. Set canvas size to match image EXACTLY
         canvas.width = imgObj.width;
         canvas.height = imgObj.height;
-        
-        // 2. IMPORTANT: Get context again after resizing (some browsers reset it)
         ctx = canvas.getContext('2d');
-        
-        // 3. Draw immediately
         drawCanvas();
-        
-        status = "Image loaded. Drag a box around text to scan.";
+        statusMsg = "Image loaded. Drag a box around text to scan.";
       };
       imgObj.src = url;
       
       resultText = "";
+      translation = "";
       confidence = 0;
       selection = null;
     }
   }
-
-  // --- Mouse Events for Drawing the Box ---
 
   function onMouseDown(e) {
     if (!imgObj) return;
@@ -66,7 +81,7 @@
     startX = (e.clientX - rect.left) * scaleX;
     startY = (e.clientY - rect.top) * scaleY;
     isDragging = true;
-    selection = null; // Clear old selection
+    selection = null;
     drawCanvas();
   }
 
@@ -78,18 +93,15 @@
     
     currentX = (e.clientX - rect.left) * scaleX;
     currentY = (e.clientY - rect.top) * scaleY;
-    drawCanvas(); // Re-draw image + red box
+    drawCanvas();
   }
 
   function onMouseUp() {
     if (!isDragging) return;
     isDragging = false;
-
-    // Calculate final box
     const w = currentX - startX;
     const h = currentY - startY;
 
-    // Only scan if box is big enough (avoid accidental clicks)
     if (Math.abs(w) > 10 && Math.abs(h) > 10) {
       selection = {
         x: w > 0 ? startX : currentX,
@@ -97,93 +109,89 @@
         w: Math.abs(w),
         h: Math.abs(h)
       };
-      drawCanvas(); // Draw final red box
-      scanSelection(); // Auto-start OCR
+      drawCanvas();
+      scanSelection();
     }
   }
 
   function drawCanvas() {
     if (!ctx || !imgObj) return;
-    
-    // 1. Clear & Draw Image
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(imgObj, 0, 0);
 
-    // 2. Draw Selection Box (Red)
     let box = selection;
-    
-    // If we are currently dragging, calculate temporary box
     if (isDragging) {
-      box = {
-        x: startX,
-        y: startY,
-        w: currentX - startX,
-        h: currentY - startY
-      };
+      box = { x: startX, y: startY, w: currentX - startX, h: currentY - startY };
     }
 
     if (box) {
       ctx.strokeStyle = "red";
-      ctx.lineWidth = 4;
+      ctx.lineWidth = 5;
       ctx.strokeRect(box.x, box.y, box.w, box.h);
-      
-      // Dim the rest of the image
-      ctx.fillStyle = "rgba(0,0,0,0.3)";
-      ctx.fillRect(0, 0, canvas.width, box.y); // Top
-      ctx.fillRect(0, box.y + box.h, canvas.width, canvas.height - (box.y + box.h)); // Bottom
-      ctx.fillRect(0, box.y, box.x, box.h); // Left
-      ctx.fillRect(box.x + box.w, box.y, canvas.width - (box.x + box.w), box.h); // Right
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(0, 0, canvas.width, box.y);
+      ctx.fillRect(0, box.y + box.h, canvas.width, canvas.height - (box.y + box.h));
+      ctx.fillRect(0, box.y, box.x, box.h);
+      ctx.fillRect(box.x + box.w, box.y, canvas.width - (box.x + box.w), box.h);
     }
   }
 
   async function scanSelection() {
     if (!selection) return;
     isProcessing = true;
-    status = "Processing selection...";
+    
+    // Auto-load translator if needed
+    if (!translator && !isTranslatorLoading) {
+        await loadTranslator();
+    }
 
     try {
-      // 1. Crop image via a temporary canvas
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = selection.w;
       tempCanvas.height = selection.h;
       const tCtx = tempCanvas.getContext('2d');
       
-      // Draw ONLY the selected part
-      tCtx.drawImage(
-        imgObj, 
-        selection.x, selection.y, selection.w, selection.h, // Source
-        0, 0, selection.w, selection.h // Destination
-      );
+      tCtx.drawImage(imgObj, selection.x, selection.y, selection.w, selection.h, 0, 0, selection.w, selection.h);
       
-      // 2. Pre-process (Binarize for better OCR)
+      // Binarize
       const imageData = tCtx.getImageData(0, 0, selection.w, selection.h);
       const data = imageData.data;
       for (let i = 0; i < data.length; i += 4) {
         const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-        const color = avg > 160 ? 255 : 0; // Threshold
+        const color = avg > 140 ? 255 : 0;
         data[i] = data[i + 1] = data[i + 2] = color;
       }
       tCtx.putImageData(imageData, 0, 0);
 
       const cropUrl = tempCanvas.toDataURL();
 
-      // 3. Initialize Worker if needed
       if (!worker) {
-        status = "Loading AI model...";
+        statusMsg = "Loading German OCR model...";
         worker = await createWorker('deu');
       }
 
-      // 4. Run OCR
-      status = "Reading text...";
+      statusMsg = "Reading text...";
       const ret = await worker.recognize(cropUrl);
       
       resultText = ret.data.text.trim();
       confidence = ret.data.confidence;
-      status = "✅ Found text!";
+
+      // Translate
+      if (resultText && translator) {
+        statusMsg = "Translating...";
+        const output = await translator(resultText, {
+          src_lang: 'deu',
+          tgt_lang: 'eng'
+        });
+        translation = output[0].translation_text;
+        statusMsg = "✅ Done!";
+      } else {
+        statusMsg = "✅ OCR Done (Waiting for translator...)";
+      }
       
     } catch (err) {
       console.error(err);
-      status = "❌ Error: " + err.message;
+      statusMsg = "❌ Error: " + err.message;
     } finally {
       isProcessing = false;
     }
@@ -191,7 +199,7 @@
 </script>
 
 <div style="padding: 2rem; max-width: 1200px; margin: 0 auto; font-family: sans-serif;">
-  <h1>🔪 Crop & Scan</h1>
+  <h1>🔪 Crop & Scan & Translate</h1>
   <p>Draw a box around a German speech bubble to translate it.</p>
 
   <input type="file" accept="image/*" on:change={handleFileSelect} bind:this={fileInput} style="margin-bottom: 10px;" />
@@ -200,7 +208,6 @@
     
     <!-- Left: Canvas Area -->
     <div style="flex: 2; border: 1px solid #ccc; overflow: auto; max-height: 80vh; position: relative;">
-      <!-- Canvas needs to bind to variable 'canvas' -->
       <canvas 
         bind:this={canvas}
         on:mousedown={onMouseDown}
@@ -219,11 +226,17 @@
 
     <!-- Right: Results -->
     <div style="flex: 1; background: #f9f9f9; padding: 20px; border-radius: 8px; min-width: 300px;">
-      <h3>Detected Text</h3>
-      <p style="color: #666; font-size: 0.9em;">{status}</p>
+      <h3>Status</h3>
+      <p style="color: #666; font-size: 0.9em;">{statusMsg}</p>
       
-      <div style="background: white; padding: 10px; border: 1px solid #ddd; min-height: 100px; margin-bottom: 20px; white-space: pre-wrap;">
-        {resultText || "(No text selected)"}
+      <h3>Detected Text (German)</h3>
+      <div style="background: white; padding: 10px; border: 1px solid #ddd; min-height: 50px; margin-bottom: 20px; white-space: pre-wrap;">
+        {resultText || "..."}
+      </div>
+
+      <h3>Translation (English)</h3>
+      <div style="background: #eef; padding: 10px; border: 1px solid #aaf; min-height: 50px; margin-bottom: 20px;">
+        {translation || "..."}
       </div>
 
       {#if confidence > 0}

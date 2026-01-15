@@ -4,7 +4,8 @@
   
   let status = "Waiting for file...";
   let isUploading = false;
-  let folderName = ""; 
+  // Change default to empty or a helpful hint
+  let folderPath = "MAD/Love Trouble/Band 01"; 
 
   async function handleDrop(event) {
     event.preventDefault();
@@ -15,10 +16,13 @@
       return;
     }
 
-    if (!folderName) {
-      alert("Please type a folder name (e.g., Chapter-100) first!");
+    if (!folderPath) {
+      alert("Please type the target folder path first!");
       return;
     }
+
+    // Remove trailing slash if user added one
+    const cleanPath = folderPath.replace(/\/$/, "");
 
     isUploading = true;
     status = "Unzipping file locally...";
@@ -26,7 +30,6 @@
     try {
       const zip = new JSZip();
       const content = await zip.loadAsync(file);
-      
       const filesToUpload = [];
       let pageIndex = 1;
       const fileNames = Object.keys(content.files).sort();
@@ -44,10 +47,11 @@
         }
       }
 
-      status = `Uploading ${filesToUpload.length} pages...`;
+      status = `Uploading ${filesToUpload.length} pages to ${cleanPath}...`;
       
       for (const item of filesToUpload) {
-        await uploadFile(item.name, item.blob);
+        // Pass the CLEAN path
+        await uploadFile(item.name, item.blob, cleanPath);
       }
 
       status = "✅ Success! All pages uploaded.";
@@ -60,11 +64,11 @@
     }
   }
 
-  async function uploadFile(filename, blob) {
+  async function uploadFile(filename, blob, path) {
     const formData = new FormData();
     formData.append('file', blob);
     formData.append('filename', filename);
-    formData.append('folder', folderName);
+    formData.append('folderPath', path); // Send the full path
 
     const res = await fetch('/api/upload-r2', {
       method: 'POST',
@@ -82,25 +86,20 @@
   <h1>Manga Upload Tool</h1>
   
   <div style="margin-bottom: 20px;">
-    <label style="display:block; font-weight:bold;">Folder Name:</label>
+    <label style="display:block; font-weight:bold;">Target Folder Path:</label>
     <input 
       type="text" 
-      bind:value={folderName} 
-      placeholder="e.g. Chapter-100"
+      bind:value={folderPath} 
+      placeholder="e.g. MAD/Love Trouble/Band 01"
       style="width: 100%; padding: 10px; margin-top:5px;"
     />
+    <small style="color: #666;">Files will be saved to: <code>{folderPath || '...'}/page_001_de.jpg</code></small>
   </div>
 
   <div 
     on:drop={handleDrop} 
     on:dragover={(e) => e.preventDefault()}
-    style="
-      border: 3px dashed #ccc; 
-      padding: 50px; 
-      text-align: center; 
-      border-radius: 10px;
-      background: #f9f9f9;
-    "
+    style="border: 3px dashed #ccc; padding: 50px; text-align: center; border-radius: 10px; background: #f9f9f9;"
   >
     <h2>{isUploading ? '⏳ Processing...' : '📂 Drag .CBZ File Here'}</h2>
     <p>{status}</p>

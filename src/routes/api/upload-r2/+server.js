@@ -6,20 +6,19 @@ export async function POST({ request, platform }) {
     const formData = await request.formData();
     const file = formData.get('file');
     const filename = formData.get('filename');
-    const folderName = formData.get('folder');
+    const folderPath = formData.get('folderPath'); // New parameter
 
-    if (!file || !filename || !folderName) {
+    if (!file || !filename || !folderPath) {
       return json({ error: 'Missing parameters' }, { status: 400 });
     }
 
-    // Check if R2 is bound
     if (!platform?.env?.MY_BUCKET) {
-      // If developing locally, this might be missing.
-      // But on Cloudflare Pages, it will work if you configured the binding.
-      return json({ error: 'R2 Bucket not configured in Cloudflare Pages settings' }, { status: 500 });
+      return json({ error: 'R2 Bucket not configured' }, { status: 500 });
     }
 
-    const fullPath = `MAD/One Piece/${folderName}/${filename}`;
+    // Combine path + filename directly
+    // Example: "MAD/Love Trouble/Band 01" + "/" + "page_001_de.jpg"
+    const fullPath = `${folderPath}/${filename}`;
     
     await platform.env.MY_BUCKET.put(fullPath, file);
 

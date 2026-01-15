@@ -1,9 +1,8 @@
 <script>
   import { createWorker } from 'tesseract.js';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   let fileInput;
-  let imagePreview = null;
   let status = "Ready";
   let resultText = "";
   let confidence = 0;
@@ -16,7 +15,14 @@
   let imgObj = null;
   let isDragging = false;
   let startX, startY, currentX, currentY;
-  let selection = null; // {x, y, w, h}
+  let selection = null;
+
+  onMount(() => {
+    // Initialize context once mounted
+    if (canvas) {
+        ctx = canvas.getContext('2d');
+    }
+  });
 
   onDestroy(async () => {
     if (worker) await worker.terminate();
@@ -26,18 +32,22 @@
     const file = e.target.files[0];
     if (file) {
       const url = URL.createObjectURL(file);
-      imagePreview = url;
       
-      // Load image into an Image Object for Canvas
       imgObj = new Image();
-      imgObj.src = url;
       imgObj.onload = () => {
-        // Resize canvas to match image
+        // 1. Set canvas size to match image EXACTLY
         canvas.width = imgObj.width;
         canvas.height = imgObj.height;
+        
+        // 2. IMPORTANT: Get context again after resizing (some browsers reset it)
+        ctx = canvas.getContext('2d');
+        
+        // 3. Draw immediately
         drawCanvas();
+        
         status = "Image loaded. Drag a box around text to scan.";
       };
+      imgObj.src = url;
       
       resultText = "";
       confidence = 0;

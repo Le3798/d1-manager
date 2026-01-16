@@ -1,19 +1,21 @@
 <script>
   import { createWorker } from 'tesseract.js';
-  import { pipeline } from '@xenova/transformers';
   import { onDestroy, onMount } from 'svelte';
 
+  // --- CONFIGURATION ---
+  // Replace this with your actual Cloudflare Worker URL
+  const WORKER_URL = "https://secure-gate.deutschlernmaterial-kontakt.workers.dev"; 
+
   let fileInput;
-  let statusMsg = "Ready"; // Renamed from 'status'
+  let statusMsg = "Ready"; 
   let resultText = "";
   let confidence = 0;
   let isProcessing = false;
   let worker = null;
 
   // Translation variables
-  let translator = null;
-  let isTranslatorLoading = false;
   let translation = "";
+  let isTranslating = false; // New state for cloud translation
 
   // Canvas variables
   let canvas;
@@ -23,30 +25,58 @@
   let startX, startY, currentX, currentY;
   let selection = null;
 
+  // Session variables (assuming you store these after login)
+  let userEmail = "";
+  let sessionToken = "";
+
   onMount(() => {
     if (canvas) {
         ctx = canvas.getContext('2d');
     }
+    // Load session details (adjust keys if you use different names)
+    userEmail = localStorage.getItem("userEmail") || ""; 
+    sessionToken = localStorage.getItem("sessionToken") || "";
   });
 
   onDestroy(async () => {
     if (worker) await worker.terminate();
   });
 
-  // --- Translation Loader ---
-  async function loadTranslator() {
-    if (translator) return;
-    isTranslatorLoading = true;
-    statusMsg = "Downloading translation model (happens once)...";
+  // --- New Cloud Translation Function ---
+  async function translateWithWorker(text) {
+    if (!text || text.trim() === "") return;
     
+    isTranslating = true;
+    statusMsg = "Translating via Cloud AI...";
+    translation = ""; // Clear previous
+
     try {
-      translator = await pipeline('translation', 'Xenova/opus-mt-de-en');
-      statusMsg = "Translator ready!";
-    } catch (err) {
-      console.error(err);
-      statusMsg = "❌ Failed to load translator";
+        const params = new URLSearchParams({
+            mode: "translate",
+            email: userEmail,
+            token: sessionToken,
+            target: "English",
+            text: text
+        });
+
+        // Call your Worker (V19.7)
+        const res = await fetch(`${WORKER_URL}?${params.toString()}`);
+        const data = await res.json();
+
+        if (data.allowed) {
+            translation = data.translation;
+            statusMsg = "✅ Done!";
+        } else {
+            translation = "Error: " + (data.reason || "Server denied request");
+            statusMsg = "❌ Translation Failed";
+        }
+
+    } catch (e) {
+        console.error(e);
+        translation = "Network Error: Could not reach worker.";
+        statusMsg = "❌ Connection Failed";
     } finally {
-      isTranslatorLoading = false;
+        isTranslating = false;
     }
   }
 
@@ -139,11 +169,6 @@
   async function scanSelection() {
     if (!selection) return;
     isProcessing = true;
-    
-    // Auto-load translator if needed
-    if (!translator && !isTranslatorLoading) {
-        await loadTranslator();
-    }
 
     try {
       const tempCanvas = document.createElement('canvas');
@@ -153,7 +178,7 @@
       
       tCtx.drawImage(imgObj, selection.x, selection.y, selection.w, selection.h, 0, 0, selection.w, selection.h);
       
-      // Binarize
+      // Binarize (Your original logic kept intact)
       const imageData = tCtx.getImageData(0, 0, selection.w, selection.h);
       const data = imageData.data;
       for (let i = 0; i < data.length; i += 4) {
@@ -176,17 +201,11 @@
       resultText = ret.data.text.trim();
       confidence = ret.data.confidence;
 
-      // Translate
-      if (resultText && translator) {
-        statusMsg = "Translating...";
-        const output = await translator(resultText, {
-          src_lang: 'deu',
-          tgt_lang: 'eng'
-        });
-        translation = output[0].translation_text;
-        statusMsg = "✅ Done!";
+      // --- CHANGED: Call Cloud Worker instead of local translator ---
+      if (resultText) {
+        await translateWithWorker(resultText);
       } else {
-        statusMsg = "✅ OCR Done (Waiting for translator...)";
+        statusMsg = "No text found in selection.";
       }
       
     } catch (err) {
@@ -236,7 +255,11 @@
 
       <h3>Translation (English)</h3>
       <div style="background: #eef; padding: 10px; border: 1px solid #aaf; min-height: 50px; margin-bottom: 20px;">
-        {translation || "..."}
+        {#if isTranslating}
+            <span style="color: #666; font-style: italic;">Processing...</span>
+        {:else}
+            {translation || "..."}
+        {/if}
       </div>
 
       {#if confidence > 0}

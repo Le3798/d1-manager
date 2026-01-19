@@ -20,7 +20,6 @@
       const wasmBinary = await wasmRes.arrayBuffer();
 
       // 2. Import the main ESM entry point
-      // Note: We use the '/index.js' entry which properly exports createExtractorFromData
       const mod = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/index.js');
       
       if (typeof mod.createExtractorFromData !== 'function') {
@@ -214,7 +213,7 @@
       placeholder="e.g. MAD/Love Trouble/Band 01"
       style="width: 100%; padding: 10px; margin-top:5px;"
     />
-    <small style="color: #666;">Files will be saved to: de>{folderPath || '...'}/page_001_de.jpg</code></small>
+    <small style="color: #666;">Files will be saved to: <code>{folderPath || '...'}/page_001_de.jpg</code></small>
   </div>
 
   <div 

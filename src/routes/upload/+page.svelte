@@ -1,4 +1,3 @@
-<!-- src/routes/upload/+page.svelte -->
 <script>
   import JSZip from 'jszip';
   import { onMount } from 'svelte';
@@ -9,24 +8,33 @@
   let libarchiveReady = false;
 
   onMount(async () => {
-    // We load LibArchive manually from CDN to ensure it works without npm install
+    // Load LibArchive.js from CDN
     try {
       if (!window.Archive) {
         const script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/libarchive.js';
+        
         script.onload = () => {
-          // Initialize the worker configuration
+          // Initialize worker with absolute URL
           window.Archive.init({
             workerUrl: 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/worker-bundle.js'
           });
           libarchiveReady = true;
           status = "Ready! Drag a .CBZ or .CBR file here.";
         };
+        
         script.onerror = () => {
-          throw new Error("Failed to load script");
+          throw new Error("Failed to load LibArchive script");
         };
+        
         document.head.appendChild(script);
       } else {
+        // Already loaded
+        if (!libarchiveReady) {
+             window.Archive.init({
+                workerUrl: 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/worker-bundle.js'
+             });
+        }
         libarchiveReady = true;
         status = "Ready! Drag a .CBZ or .CBR file here.";
       }
@@ -99,23 +107,29 @@
     }
   }
 
+  // --- CBZ Extraction (JSZip) ---
   async function extractCBZ(file) {
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
     const filesToUpload = [];
-    let pageIndex = 1;
     
-    // Sort file names to ensure correct page order
-    const fileNames = Object.keys(content.files).sort();
+    // Sort file names naturally (e.g. 1, 2, 10 instead of 1, 10, 2)
+    const fileNames = Object.keys(content.files).sort((a, b) => 
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    let pageIndex = 1;
 
     for (const fileName of fileNames) {
       const fileData = content.files[fileName];
       
+      // Filter out directories and MacOS hidden files
       if (!fileData.dir && !fileName.startsWith('__MACOSX') && !fileName.includes('/.')) {
         const lowerName = fileName.toLowerCase();
         if (lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) {
           const blob = await fileData.async('blob');
           const ext = fileName.split('.').pop();
+          // Rename: page_001_de.jpg
           const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
           filesToUpload.push({ name: newName, blob });
           pageIndex++;
@@ -125,28 +139,37 @@
     return filesToUpload;
   }
 
+  // --- CBR Extraction (LibArchive) ---
   async function extractCBR(file) {
-    // Use the global Archive object loaded from CDN
+    // Open the file with LibArchive
     const archive = await window.Archive.open(file);
-    const extractedObj = await archive.extractFiles();
+    let extractedObj = null;
+
+    // extractFiles() returns an object { filename: FileObject, ... }
+    try {
+        extractedObj = await archive.extractFiles();
+    } catch (e) {
+        throw new Error("Failed to extract CBR. File might be corrupted or encrypted.");
+    }
     
     const filesToUpload = [];
-    let pageIndex = 1;
-
-    // The result is an object { "filename": File/Blob, ... }
-    // We need to sort keys to keep order
+    
+    // Get keys and sort them naturally to ensure correct page order
     const sortedFilenames = Object.keys(extractedObj).sort((a, b) => 
       a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
 
+    let pageIndex = 1;
+
     for (const fileName of sortedFilenames) {
-      if (fileName.startsWith('__MACOSX') || fileName.includes('/.')) continue;
+      // Ignore hidden/system files
+      if (fileName.startsWith('__MACOSX') || fileName.includes('/.') || fileName.includes('.DS_Store')) continue;
       
       const lowerName = fileName.toLowerCase();
+      // Check for valid image extensions
       if (!lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) continue;
 
-      const fileData = extractedObj[fileName];
-      // libarchive.js returns File objects, which are Blobs
+      const fileData = extractedObj[fileName]; // This is a File object (Blob)
       const ext = fileName.split('.').pop();
       const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
       

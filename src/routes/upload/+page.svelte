@@ -12,16 +12,16 @@
 
   onMount(async () => {
     try {
-      // 1. Dynamic Import for the main library
+      // 1. Dynamic Import
       const module = await import('https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/main.js');
       Archive = module.Archive;
 
-      // 2. Define CDN URLs for worker and wasm
+      // 2. Define CDN URLs
       const cdnBase = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist';
       const workerUrl = `${cdnBase}/worker-bundle.js`;
       const wasmUrl = `${cdnBase}/libarchive.wasm`;
 
-      // 3. Create a Blob Worker to bypass Cross-Origin restrictions
+      // 3. Blob Proxy (Fixes "CBR support not ready" / CORS issues)
       const blobCode = `
         self.Module = {
             locateFile: function(path) {
@@ -34,17 +34,15 @@
       const blob = new Blob([blobCode], { type: 'application/javascript' });
       const localWorkerUrl = URL.createObjectURL(blob);
 
-      // 4. Initialize LibArchive
-      Archive.init({
-        workerUrl: localWorkerUrl
-      });
+      // 4. Initialize
+      Archive.init({ workerUrl: localWorkerUrl });
 
       libarchiveReady = true;
       status = "Ready! Drag a .CBZ or .CBR file here.";
 
     } catch (e) {
       console.error("LibArchive loading failed:", e);
-      status = "Warning: CBR support failed (Network/CSP Error). CBZ only.";
+      status = "Warning: CBR support failed (Network Error). CBZ only.";
     }
   });
 
@@ -52,53 +50,44 @@
     event.preventDefault();
     const file = event.dataTransfer.files[0];
     
-    if (!file) {
-      alert("Please upload a file!");
-      return;
-    }
-
+    if (!file) return alert("Please upload a file!");
+    
     const fileName = file.name.toLowerCase();
     const isCBZ = fileName.endsWith('.cbz');
     const isCBR = fileName.endsWith('.cbr');
 
-    if (!isCBZ && !isCBR) {
-      alert("Please upload a .cbz or .cbr file!");
-      return;
-    }
-
-    if (isCBR && !libarchiveReady) {
-      alert("CBR support failed to load. Please check console for network errors.");
-      return;
-    }
-
-    if (!folderPath) {
-      alert("Please type the target folder path first!");
-      return;
-    }
+    if (!isCBZ && !isCBR) return alert("Please upload a .cbz or .cbr file!");
+    if (isCBR && !libarchiveReady) return alert("CBR support is not ready yet.");
+    if (!folderPath) return alert("Please type the target folder path first!");
 
     const cleanPath = folderPath.replace(/\/$/, "");
     isUploading = true;
-    status = `Extracting ${isCBZ ? 'CBZ' : 'CBR'} file locally...`;
+    status = `Scanning ${isCBZ ? 'CBZ' : 'CBR'} structure...`;
 
     try {
-      let filesToUpload = [];
+      // Step 1: Get the LIST of files (fast), do not extract content yet
+      let entryList = [];
 
       if (isCBZ) {
-        filesToUpload = await extractCBZ(file);
+        entryList = await scanCBZ(file);
       } else if (isCBR) {
-        filesToUpload = await extractCBR(file);
+        entryList = await scanCBR(file);
       }
 
-      if (filesToUpload.length === 0) {
-        throw new Error("No valid images found in archive!");
-      }
+      if (entryList.length === 0) throw new Error("No valid images found!");
 
-      status = `Uploading ${filesToUpload.length} pages to ${cleanPath}...`;
+      status = `Found ${entryList.length} pages. Starting upload...`;
       
-      for (let i = 0; i < filesToUpload.length; i++) {
-        const item = filesToUpload[i];
-        status = `Uploading ${i + 1}/${filesToUpload.length}: ${item.name}...`;
-        await uploadFile(item.name, item.blob, cleanPath);
+      // Step 2: Extract and Upload ONE BY ONE (prevents memory crash)
+      for (let i = 0; i < entryList.length; i++) {
+        const item = entryList[i];
+        status = `Processing ${i + 1}/${entryList.length}: ${item.newName}...`;
+        
+        // Extract ONLY this file now
+        const blob = await extractEntry(item);
+        
+        // Upload
+        await uploadFile(item.newName, blob, cleanPath);
       }
 
       status = "✅ Success! All pages uploaded.";
@@ -111,69 +100,77 @@
     }
   }
 
-  async function extractCBZ(file) {
+  // --- CBZ Scanner (JSZip) ---
+  async function scanCBZ(file) {
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
-    const filesToUpload = [];
     
-    // Natural sort
+    // Natural Sort
     const fileNames = Object.keys(content.files).sort((a, b) => 
         a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
 
+    const entries = [];
     let pageIndex = 1;
 
     for (const fileName of fileNames) {
       const fileData = content.files[fileName];
-      
       if (!fileData.dir && !fileName.startsWith('__MACOSX') && !fileName.includes('/.')) {
-        const lowerName = fileName.toLowerCase();
-        if (lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) {
-          const blob = await fileData.async('blob');
+        if (fileName.match(/\.(jpg|jpeg|png|webp|gif)$/i)) {
           const ext = fileName.split('.').pop();
-          const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
-          filesToUpload.push({ name: newName, blob });
+          entries.push({
+            type: 'cbz',
+            data: fileData, // Store reference, not blob
+            newName: `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`
+          });
           pageIndex++;
         }
       }
     }
-    return filesToUpload;
+    return entries;
   }
 
-  async function extractCBR(file) {
+  // --- CBR Scanner (LibArchive) ---
+  async function scanCBR(file) {
     const archive = await Archive.open(file);
-    let extractedObj = null;
+    
+    // key fix: getFilesArray() only reads headers, doesn't extract data
+    const fileArray = await archive.getFilesArray(); 
+    
+    // Filter for images
+    const imageFiles = fileArray.filter(item => {
+        const name = item.file.name;
+        return name && !name.startsWith('__MACOSX') && name.match(/\.(jpg|jpeg|png|webp|gif)$/i);
+    });
 
-    try {
-        extractedObj = await archive.extractFiles();
-    } catch (e) {
-        throw new Error("Failed to extract CBR. File might be corrupted or encrypted.");
-    }
-    
-    const filesToUpload = [];
-    
-    // Natural sort
-    const sortedFilenames = Object.keys(extractedObj).sort((a, b) => 
-      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    // Natural Sort
+    imageFiles.sort((a, b) => 
+      a.file.name.localeCompare(b.file.name, undefined, { numeric: true, sensitivity: 'base' })
     );
 
+    const entries = [];
     let pageIndex = 1;
 
-    for (const fileName of sortedFilenames) {
-      if (fileName.startsWith('__MACOSX') || fileName.includes('/.') || fileName.includes('.DS_Store')) continue;
-      
-      const lowerName = fileName.toLowerCase();
-      if (!lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) continue;
-
-      const fileData = extractedObj[fileName]; 
-      const ext = fileName.split('.').pop();
-      const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
-      
-      filesToUpload.push({ name: newName, blob: fileData });
+    for (const item of imageFiles) {
+      const ext = item.file.name.split('.').pop();
+      entries.push({
+        type: 'cbr',
+        data: item.file, // This is a CompressedFile object
+        newName: `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`
+      });
       pageIndex++;
     }
+    
+    return entries;
+  }
 
-    return filesToUpload;
+  // --- Unified Extractor ---
+  async function extractEntry(entry) {
+    if (entry.type === 'cbz') {
+      return await entry.data.async('blob');
+    } else {
+      return await entry.data.extract(); // Extracts single file from CBR
+    }
   }
 
   async function uploadFile(filename, blob, path) {
@@ -216,7 +213,7 @@
     class:uploading={isUploading}
   >
     <h2>{isUploading ? '⏳ Processing...' : '📂 Drag .CBZ or .CBR File Here'}</h2>
-    <p>{status}</p>
+    <p style="white-space: pre-wrap;">{status}</p>
   </div>
 </div>
 

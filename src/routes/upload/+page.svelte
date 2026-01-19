@@ -8,19 +8,18 @@
   
   // State for unrar
   let unrarReady = false;
-  let createExtractorFromData = null;
-  let wasmBinary = null;
+  let unrarModule = null;
 
   onMount(async () => {
     try {
-      // Load node-unrar-js for browser
-      const unrarModule = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.js');
-      createExtractorFromData = unrarModule.createExtractorFromData;
+      // CORRECT: Load from /esm path and fetch WASM separately
+      const module = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/dist/js/unrar.js');
       
-      // Load WASM binary
-      const wasmResponse = await fetch('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.wasm');
-      wasmBinary = await wasmResponse.arrayBuffer();
+      // Fetch WASM binary
+      const wasmResponse = await fetch('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/dist/js/unrar.wasm');
+      const wasmBinary = await wasmResponse.arrayBuffer();
       
+      unrarModule = { ...module, wasmBinary };
       unrarReady = true;
       status = "Ready! Drag a .CBZ or .CBR file here.";
 
@@ -70,7 +69,6 @@
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
     
-    // Natural Sort
     const fileNames = Object.keys(content.files).sort((a, b) => 
         a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
@@ -109,12 +107,14 @@
     
     // Read file as ArrayBuffer
     const arrayBuffer = await file.arrayBuffer();
-    const buf = new Uint8Array(arrayBuffer);
     
     status = "Extracting CBR archive...";
     
-    // Create extractor
-    const extractor = await createExtractorFromData({ data: buf, wasmBinary });
+    // Create extractor with WASM binary
+    const extractor = await unrarModule.createExtractorFromData({
+      data: arrayBuffer,
+      wasmBinary: unrarModule.wasmBinary
+    });
     
     // Get file list
     const list = extractor.getFileList();
@@ -138,7 +138,7 @@
 
     status = `Found ${imageHeaders.length} pages. Extracting...`;
 
-    // Extract all files at once (much faster than one-by-one)
+    // Extract all files at once
     const extracted = extractor.extract({ 
       files: imageHeaders.map(h => h.name) 
     });

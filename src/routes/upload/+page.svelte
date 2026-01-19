@@ -1,20 +1,20 @@
-<script>
+<script lang="ts">
   import JSZip from "jszip";
   import { onMount } from "svelte";
-
-  // Local, bundled import (no CDN)
-  import { createExtractorFromData } from "node-unrar-js/esm";
-  import unrarWasmUrl from "node-unrar-js/esm/js/unrar.wasm?url";
+  import { browser } from "$app/environment";
 
   let status = "Initializing...";
   let isUploading = false;
   let folderPath = "MAD/Love Trouble/Band 01";
 
   let unrarReady = false;
-  let wasmBinary = null;
+  let wasmBinary: ArrayBuffer | null = null;
+
+  // Loaded dynamically (client-only)
+  let createExtractorFromData: null | ((opts: any) => Promise<any>) = null;
 
   const IMAGE_EXT_RE = /\.(jpg|jpeg|png|webp|gif)$/i;
-  const mimeByExt = {
+  const mimeByExt: Record<string, string> = {
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
     png: "image/png",
@@ -23,7 +23,18 @@
   };
 
   onMount(async () => {
+    if (!browser) return;
+
     try {
+      // Import the package in a way that DOES NOT pull the fs/path-based file extractor
+      // (your build log shows /esm/js/ExtractorFile.js is what breaks builds) [file:85]
+      const unrar = await import("node-unrar-js");
+      createExtractorFromData = unrar.createExtractorFromData;
+
+      // Load WASM as a URL asset via Vite, then fetch ArrayBuffer for wasmBinary. [web:1]
+      const wasmMod = await import("node-unrar-js/esm/js/unrar.wasm?url");
+      const unrarWasmUrl = wasmMod.default as string;
+
       const res = await fetch(unrarWasmUrl);
       if (!res.ok) throw new Error(`Failed to load WASM: ${res.status} ${res.statusText}`);
       wasmBinary = await res.arrayBuffer();
@@ -37,7 +48,7 @@
     }
   });
 
-  async function handleDrop(event) {
+  async function handleDrop(event: DragEvent) {
     event.preventDefault();
     if (isUploading) return;
 
@@ -60,7 +71,7 @@
       else await processCBR(file, cleanPath);
 
       status = "Success. All pages uploaded.";
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
       status = "Error: " + (err?.message ?? String(err));
     } finally {
@@ -68,7 +79,7 @@
     }
   }
 
-  async function processCBZ(file, cleanPath) {
+  async function processCBZ(file: File, cleanPath: string) {
     status = "Reading CBZ file...";
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
@@ -77,7 +88,7 @@
       a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
     );
 
-    const imagesToUpload = [];
+    const imagesToUpload: Array<{ fileName: string; fileData: any }> = [];
     for (const name of fileNames) {
       const entry = content.files[name];
       if (
@@ -105,8 +116,8 @@
     }
   }
 
-  async function processCBR(file, cleanPath) {
-    if (!wasmBinary) throw new Error("CBR engine not initialized.");
+  async function processCBR(file: File, cleanPath: string) {
+    if (!createExtractorFromData || !wasmBinary) throw new Error("CBR engine not initialized.");
 
     status = "Reading CBR file...";
     const arrayBuffer = await file.arrayBuffer();
@@ -121,15 +132,15 @@
     const list = extractor.getFileList();
     const fileHeaders = [...list.fileHeaders];
 
-    // Encryption detection (better than checking a non-existent flags.password)
+    // Encryption detection (library supports password/encryption flags + passing passwords). [web:1]
     const archiveEncrypted = !!list.arcHeader?.flags?.headerEncrypted;
-    const anyFileEncrypted = fileHeaders.some((h) => !!h?.flags?.encrypted);
+    const anyFileEncrypted = fileHeaders.some((h: any) => !!h?.flags?.encrypted);
     if (archiveEncrypted || anyFileEncrypted) {
       throw new Error("This CBR/RAR is encrypted/password-protected. Cannot extract.");
     }
 
     const imageHeaders = fileHeaders
-      .filter((h) => {
+      .filter((h: any) => {
         const name = h?.name;
         return (
           name &&
@@ -138,7 +149,7 @@
           IMAGE_EXT_RE.test(name)
         );
       })
-      .sort((a, b) =>
+      .sort((a: any, b: any) =>
         a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
       );
 
@@ -165,7 +176,7 @@
     }
   }
 
-  async function uploadFile(filename, blob, path) {
+  async function uploadFile(filename: string, blob: Blob, path: string) {
     const formData = new FormData();
     formData.append("file", blob);
     formData.append("filename", filename);
@@ -191,8 +202,9 @@
   <h1>Manga Upload Tool</h1>
 
   <div style="margin-bottom: 20px;">
-    <label style="display:block; font-weight:bold;">Target Folder Path:</label>
+    <label for="folderPathInput" style="display:block; font-weight:bold;">Target Folder Path:</label>
     <input
+      id="folderPathInput"
       type="text"
       bind:value={folderPath}
       placeholder="e.g. MAD/Love Trouble/Band 01"
@@ -204,6 +216,8 @@
   </div>
 
   <div
+    role="button"
+    tabindex="0"
     on:drop={handleDrop}
     on:dragover={(e) => e.preventDefault()}
     style="border: 3px dashed #ccc; padding: 50px; text-align: center; border-radius: 10px; background: #f9f9f9; transition: background 0.2s;"

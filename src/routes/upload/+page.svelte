@@ -6,43 +6,27 @@
   let isUploading = false;
   let folderPath = "MAD/Love Trouble/Band 01";
   
-  // State for LibArchive
-  let libarchiveReady = false;
-  let Archive = null; 
+  // State for unrar
+  let unrarReady = false;
+  let createExtractorFromData = null;
+  let wasmBinary = null;
 
   onMount(async () => {
     try {
-      // 1. Dynamic Import
-      const module = await import('https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/main.js');
-      Archive = module.Archive;
-
-      // 2. Define CDN URLs
-      const cdnBase = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist';
-      const workerUrl = `${cdnBase}/worker-bundle.js`;
-      const wasmUrl = `${cdnBase}/libarchive.wasm`;
-
-      // 3. Blob Proxy (Fixes "CBR support not ready" / CORS issues)
-      const blobCode = `
-        self.Module = {
-            locateFile: function(path) {
-                if (path.endsWith('.wasm')) return '${wasmUrl}';
-                return path;
-            }
-        };
-        importScripts('${workerUrl}');
-      `;
-      const blob = new Blob([blobCode], { type: 'application/javascript' });
-      const localWorkerUrl = URL.createObjectURL(blob);
-
-      // 4. Initialize
-      Archive.init({ workerUrl: localWorkerUrl });
-
-      libarchiveReady = true;
+      // Load node-unrar-js for browser
+      const unrarModule = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.js');
+      createExtractorFromData = unrarModule.createExtractorFromData;
+      
+      // Load WASM binary
+      const wasmResponse = await fetch('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.wasm');
+      wasmBinary = await wasmResponse.arrayBuffer();
+      
+      unrarReady = true;
       status = "Ready! Drag a .CBZ or .CBR file here.";
 
     } catch (e) {
-      console.error("LibArchive loading failed:", e);
-      status = "Warning: CBR support failed (Network Error). CBZ only.";
+      console.error("Unrar loading failed:", e);
+      status = "Warning: CBR support failed. CBZ only.";
     }
   });
 
@@ -57,12 +41,11 @@
     const isCBR = fileName.endsWith('.cbr');
 
     if (!isCBZ && !isCBR) return alert("Please upload a .cbz or .cbr file!");
-    if (isCBR && !libarchiveReady) return alert("CBR support is not ready yet.");
+    if (isCBR && !unrarReady) return alert("CBR support is not ready yet.");
     if (!folderPath) return alert("Please type the target folder path first!");
 
     const cleanPath = folderPath.replace(/\/$/, "");
     isUploading = true;
-    status = `Scanning ${isCBZ ? 'CBZ' : 'CBR'} structure...`;
 
     try {
       if (isCBZ) {
@@ -83,6 +66,7 @@
 
   // --- CBZ Processing ---
   async function processCBZ(file, cleanPath) {
+    status = "Reading CBZ file...";
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
     
@@ -113,75 +97,70 @@
 
     for (let i = 0; i < entries.length; i++) {
       const item = entries[i];
-      status = `Processing ${i + 1}/${entries.length}: ${item.newName}...`;
+      status = `Uploading ${i + 1}/${entries.length}: ${item.newName}...`;
       const blob = await item.data.async('blob');
       await uploadFile(item.newName, blob, cleanPath);
     }
   }
 
-  // --- CBR Processing (FIXED) ---
+  // --- CBR Processing (node-unrar-js) ---
   async function processCBR(file, cleanPath) {
-    let archive = null;
+    status = "Reading CBR file...";
     
-    try {
-      status = "Opening CBR archive...";
-      archive = await Archive.open(file);
+    // Read file as ArrayBuffer
+    const arrayBuffer = await file.arrayBuffer();
+    const buf = new Uint8Array(arrayBuffer);
+    
+    status = "Extracting CBR archive...";
+    
+    // Create extractor
+    const extractor = await createExtractorFromData({ data: buf, wasmBinary });
+    
+    // Get file list
+    const list = extractor.getFileList();
+    const fileHeaders = [...list.fileHeaders];
+    
+    // Filter for images
+    const imageHeaders = fileHeaders.filter(header => {
+      const name = header.name;
+      return name && 
+             !name.startsWith('__MACOSX') && 
+             !name.startsWith('.') &&
+             name.match(/\.(jpg|jpeg|png|webp|gif)$/i);
+    });
+
+    if (imageHeaders.length === 0) throw new Error("No valid images found!");
+
+    // Natural sort
+    imageHeaders.sort((a, b) => 
+      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    status = `Found ${imageHeaders.length} pages. Extracting...`;
+
+    // Extract all files at once (much faster than one-by-one)
+    const extracted = extractor.extract({ 
+      files: imageHeaders.map(h => h.name) 
+    });
+    
+    const files = [...extracted.files];
+    
+    status = `Uploading ${files.length} pages...`;
+
+    // Upload extracted files
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const ext = file.fileHeader.name.split('.').pop();
+      const newName = `page_${String(i + 1).padStart(3, '0')}_de.${ext}`;
       
-      status = "Reading file list...";
+      status = `Uploading ${i + 1}/${files.length}: ${newName}...`;
       
-      // CRITICAL FIX: Use timeout to prevent UI freeze
-      const fileArray = await Promise.race([
-        archive.getFilesArray(),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error("Archive reading timeout")), 30000)
-        )
-      ]);
-      
-      // Filter for images
-      const imageFiles = fileArray.filter(item => {
-        const name = item.file.name;
-        return name && 
-               !name.startsWith('__MACOSX') && 
-               !name.startsWith('.') &&
-               name.match(/\.(jpg|jpeg|png|webp|gif)$/i);
+      // Convert Uint8Array to Blob
+      const blob = new Blob([file.extraction], { 
+        type: `image/${ext === 'jpg' ? 'jpeg' : ext}` 
       });
-
-      if (imageFiles.length === 0) throw new Error("No valid images found!");
-
-      // Natural Sort
-      imageFiles.sort((a, b) => 
-        a.file.name.localeCompare(b.file.name, undefined, { numeric: true, sensitivity: 'base' })
-      );
-
-      status = `Found ${imageFiles.length} pages. Starting upload...`;
-
-      // Extract and upload one by one
-      for (let i = 0; i < imageFiles.length; i++) {
-        const item = imageFiles[i];
-        const ext = item.file.name.split('.').pop();
-        const newName = `page_${String(i + 1).padStart(3, '0')}_de.${ext}`;
-        
-        status = `Extracting ${i + 1}/${imageFiles.length}: ${newName}...`;
-        
-        // Extract single file
-        const blob = await item.file.extract();
-        
-        status = `Uploading ${i + 1}/${imageFiles.length}: ${newName}...`;
-        await uploadFile(newName, blob, cleanPath);
-        
-        // Allow UI to breathe between files
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-
-    } finally {
-      // CRITICAL FIX: Always close the archive to free memory
-      if (archive) {
-        try {
-          await archive.close();
-        } catch (e) {
-          console.warn("Archive close warning:", e);
-        }
-      }
+      
+      await uploadFile(newName, blob, cleanPath);
     }
   }
 

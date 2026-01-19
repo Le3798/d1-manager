@@ -8,22 +8,20 @@
   
   // State for LibArchive
   let libarchiveReady = false;
-  let Archive = null; // We will load the class into here
+  let Archive = null; 
 
   onMount(async () => {
     try {
-      // 1. Dynamic Import for the main library (Modern ES Module)
-      // Note: We use the 'main.js' entry point which exports { Archive }
+      // 1. Dynamic Import for the main library
       const module = await import('https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/main.js');
       Archive = module.Archive;
 
-      // 2. Define CDN URLs
+      // 2. Define CDN URLs for worker and wasm
       const cdnBase = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist';
       const workerUrl = `${cdnBase}/worker-bundle.js`;
       const wasmUrl = `${cdnBase}/libarchive.wasm`;
 
-      // 3. Create a Blob Worker to bypass Cross-Origin Worker restrictions
-      // We also inject 'Module.locateFile' so the worker finds the WASM file correctly
+      // 3. Create a Blob Worker to bypass Cross-Origin restrictions
       const blobCode = `
         self.Module = {
             locateFile: function(path) {
@@ -36,7 +34,7 @@
       const blob = new Blob([blobCode], { type: 'application/javascript' });
       const localWorkerUrl = URL.createObjectURL(blob);
 
-      // 4. Initialize LibArchive with our local blob worker
+      // 4. Initialize LibArchive
       Archive.init({
         workerUrl: localWorkerUrl
       });
@@ -118,7 +116,7 @@
     const content = await zip.loadAsync(file);
     const filesToUpload = [];
     
-    // Natural sort (1, 2, 10 instead of 1, 10, 2)
+    // Natural sort
     const fileNames = Object.keys(content.files).sort((a, b) => 
         a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
@@ -143,7 +141,6 @@
   }
 
   async function extractCBR(file) {
-    // Use the Archive class we loaded dynamically
     const archive = await Archive.open(file);
     let extractedObj = null;
 
@@ -155,7 +152,7 @@
     
     const filesToUpload = [];
     
-    // Natural sort for correct page ordering
+    // Natural sort
     const sortedFilenames = Object.keys(extractedObj).sort((a, b) => 
       a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
@@ -168,7 +165,7 @@
       const lowerName = fileName.toLowerCase();
       if (!lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) continue;
 
-      const fileData = extractedObj[fileName]; // This is a File object (Blob)
+      const fileData = extractedObj[fileName]; 
       const ext = fileName.split('.').pop();
       const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
       
@@ -197,3 +194,35 @@
     }
   }
 </script>
+
+<div style="padding: 2rem; max-width: 600px; margin: 0 auto; font-family: sans-serif;">
+  <h1>Manga Upload Tool</h1>
+  
+  <div style="margin-bottom: 20px;">
+    <label style="display:block; font-weight:bold;">Target Folder Path:</label>
+    <input 
+      type="text" 
+      bind:value={folderPath} 
+      placeholder="e.g. MAD/Love Trouble/Band 01"
+      style="width: 100%; padding: 10px; margin-top:5px;"
+    />
+    <small style="color: #666;">Files will be saved to: <code>{folderPath || '...'}/page_001_de.jpg</code></small>
+  </div>
+
+  <div 
+    on:drop={handleDrop} 
+    on:dragover={(e) => e.preventDefault()}
+    style="border: 3px dashed #ccc; padding: 50px; text-align: center; border-radius: 10px; background: #f9f9f9; transition: background 0.2s;"
+    class:uploading={isUploading}
+  >
+    <h2>{isUploading ? '⏳ Processing...' : '📂 Drag .CBZ or .CBR File Here'}</h2>
+    <p>{status}</p>
+  </div>
+</div>
+
+<style>
+    .uploading {
+        background: #e6f7ff !important;
+        border-color: #1890ff !important;
+    }
+</style>

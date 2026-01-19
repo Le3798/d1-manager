@@ -5,42 +5,48 @@
   let status = "Initializing...";
   let isUploading = false;
   let folderPath = "MAD/Love Trouble/Band 01";
+  
+  // State for LibArchive
   let libarchiveReady = false;
+  let Archive = null; // We will load the class into here
 
   onMount(async () => {
-    // Load LibArchive.js from CDN
     try {
-      if (!window.Archive) {
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/libarchive.js';
-        
-        script.onload = () => {
-          // Initialize worker with absolute URL
-          window.Archive.init({
-            workerUrl: 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/worker-bundle.js'
-          });
-          libarchiveReady = true;
-          status = "Ready! Drag a .CBZ or .CBR file here.";
+      // 1. Dynamic Import for the main library (Modern ES Module)
+      // Note: We use the 'main.js' entry point which exports { Archive }
+      const module = await import('https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/main.js');
+      Archive = module.Archive;
+
+      // 2. Define CDN URLs
+      const cdnBase = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist';
+      const workerUrl = `${cdnBase}/worker-bundle.js`;
+      const wasmUrl = `${cdnBase}/libarchive.wasm`;
+
+      // 3. Create a Blob Worker to bypass Cross-Origin Worker restrictions
+      // We also inject 'Module.locateFile' so the worker finds the WASM file correctly
+      const blobCode = `
+        self.Module = {
+            locateFile: function(path) {
+                if (path.endsWith('.wasm')) return '${wasmUrl}';
+                return path;
+            }
         };
-        
-        script.onerror = () => {
-          throw new Error("Failed to load LibArchive script");
-        };
-        
-        document.head.appendChild(script);
-      } else {
-        // Already loaded
-        if (!libarchiveReady) {
-             window.Archive.init({
-                workerUrl: 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/worker-bundle.js'
-             });
-        }
-        libarchiveReady = true;
-        status = "Ready! Drag a .CBZ or .CBR file here.";
-      }
+        importScripts('${workerUrl}');
+      `;
+      const blob = new Blob([blobCode], { type: 'application/javascript' });
+      const localWorkerUrl = URL.createObjectURL(blob);
+
+      // 4. Initialize LibArchive with our local blob worker
+      Archive.init({
+        workerUrl: localWorkerUrl
+      });
+
+      libarchiveReady = true;
+      status = "Ready! Drag a .CBZ or .CBR file here.";
+
     } catch (e) {
-      console.error(e);
-      status = "Warning: CBR support failed to load. CBZ only.";
+      console.error("LibArchive loading failed:", e);
+      status = "Warning: CBR support failed (Network/CSP Error). CBZ only.";
     }
   });
 
@@ -63,7 +69,7 @@
     }
 
     if (isCBR && !libarchiveReady) {
-      alert("CBR support is not ready. Please wait or use CBZ.");
+      alert("CBR support failed to load. Please check console for network errors.");
       return;
     }
 
@@ -107,13 +113,12 @@
     }
   }
 
-  // --- CBZ Extraction (JSZip) ---
   async function extractCBZ(file) {
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
     const filesToUpload = [];
     
-    // Sort file names naturally (e.g. 1, 2, 10 instead of 1, 10, 2)
+    // Natural sort (1, 2, 10 instead of 1, 10, 2)
     const fileNames = Object.keys(content.files).sort((a, b) => 
         a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
@@ -123,13 +128,11 @@
     for (const fileName of fileNames) {
       const fileData = content.files[fileName];
       
-      // Filter out directories and MacOS hidden files
       if (!fileData.dir && !fileName.startsWith('__MACOSX') && !fileName.includes('/.')) {
         const lowerName = fileName.toLowerCase();
         if (lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) {
           const blob = await fileData.async('blob');
           const ext = fileName.split('.').pop();
-          // Rename: page_001_de.jpg
           const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
           filesToUpload.push({ name: newName, blob });
           pageIndex++;
@@ -139,13 +142,11 @@
     return filesToUpload;
   }
 
-  // --- CBR Extraction (LibArchive) ---
   async function extractCBR(file) {
-    // Open the file with LibArchive
-    const archive = await window.Archive.open(file);
+    // Use the Archive class we loaded dynamically
+    const archive = await Archive.open(file);
     let extractedObj = null;
 
-    // extractFiles() returns an object { filename: FileObject, ... }
     try {
         extractedObj = await archive.extractFiles();
     } catch (e) {
@@ -154,7 +155,7 @@
     
     const filesToUpload = [];
     
-    // Get keys and sort them naturally to ensure correct page order
+    // Natural sort for correct page ordering
     const sortedFilenames = Object.keys(extractedObj).sort((a, b) => 
       a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
@@ -162,11 +163,9 @@
     let pageIndex = 1;
 
     for (const fileName of sortedFilenames) {
-      // Ignore hidden/system files
       if (fileName.startsWith('__MACOSX') || fileName.includes('/.') || fileName.includes('.DS_Store')) continue;
       
       const lowerName = fileName.toLowerCase();
-      // Check for valid image extensions
       if (!lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) continue;
 
       const fileData = extractedObj[fileName]; // This is a File object (Blob)
@@ -198,35 +197,3 @@
     }
   }
 </script>
-
-<div style="padding: 2rem; max-width: 600px; margin: 0 auto; font-family: sans-serif;">
-  <h1>Manga Upload Tool</h1>
-  
-  <div style="margin-bottom: 20px;">
-    <label style="display:block; font-weight:bold;">Target Folder Path:</label>
-    <input 
-      type="text" 
-      bind:value={folderPath} 
-      placeholder="e.g. MAD/Love Trouble/Band 01"
-      style="width: 100%; padding: 10px; margin-top:5px;"
-    />
-    <small style="color: #666;">Files will be saved to: <code>{folderPath || '...'}/page_001_de.jpg</code></small>
-  </div>
-
-  <div 
-    on:drop={handleDrop} 
-    on:dragover={(e) => e.preventDefault()}
-    style="border: 3px dashed #ccc; padding: 50px; text-align: center; border-radius: 10px; background: #f9f9f9; transition: background 0.2s;"
-    class:uploading={isUploading}
-  >
-    <h2>{isUploading ? '⏳ Processing...' : '📂 Drag .CBZ or .CBR File Here'}</h2>
-    <p>{status}</p>
-  </div>
-</div>
-
-<style>
-    .uploading {
-        background: #e6f7ff !important;
-        border-color: #1890ff !important;
-    }
-</style>

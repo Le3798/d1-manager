@@ -3,40 +3,36 @@
   import JSZip from 'jszip';
   import { onMount } from 'svelte';
 
-  let status = "Loading libraries...";
+  let status = "Initializing...";
   let isUploading = false;
   let folderPath = "MAD/Love Trouble/Band 01";
-  
-  // This will hold the unrar function and binary once loaded from CDN
-  let unrar = null; 
+  let libarchiveReady = false;
 
   onMount(async () => {
+    // We load LibArchive manually from CDN to ensure it works without npm install
     try {
-      status = "Initializing Unrar...";
-      
-      // 1. Fetch the WASM binary from jsDelivr
-      const wasmRes = await fetch('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.wasm');
-      if (!wasmRes.ok) throw new Error("Failed to load WASM binary");
-      const wasmBinary = await wasmRes.arrayBuffer();
-
-      // 2. Import the library from jsDelivr
-      // We import the specific ESM index to ensure we get the named export
-      const mod = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/index.js');
-      
-      if (!mod.createExtractorFromData) {
-        throw new Error("Library export 'createExtractorFromData' not found");
+      if (!window.Archive) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/libarchive.js';
+        script.onload = () => {
+          // Initialize the worker configuration
+          window.Archive.init({
+            workerUrl: 'https://cdn.jsdelivr.net/npm/libarchive.js@1.3.0/dist/worker-bundle.js'
+          });
+          libarchiveReady = true;
+          status = "Ready! Drag a .CBZ or .CBR file here.";
+        };
+        script.onerror = () => {
+          throw new Error("Failed to load script");
+        };
+        document.head.appendChild(script);
+      } else {
+        libarchiveReady = true;
+        status = "Ready! Drag a .CBZ or .CBR file here.";
       }
-
-      // 3. Store for use
-      unrar = { 
-        createExtractorFromData: mod.createExtractorFromData, 
-        wasmBinary 
-      };
-
-      status = "Ready! Drag a .CBZ or .CBR file here.";
-    } catch (err) {
-      console.error("CBR init failed:", err);
-      status = "Ready (CBZ only - CBR support failed to load).";
+    } catch (e) {
+      console.error(e);
+      status = "Warning: CBR support failed to load. CBZ only.";
     }
   });
 
@@ -58,8 +54,8 @@
       return;
     }
 
-    if (isCBR && !unrar) {
-      alert("CBR support is not available. Please use CBZ.");
+    if (isCBR && !libarchiveReady) {
+      alert("CBR support is not ready. Please wait or use CBZ.");
       return;
     }
 
@@ -108,10 +104,13 @@
     const content = await zip.loadAsync(file);
     const filesToUpload = [];
     let pageIndex = 1;
+    
+    // Sort file names to ensure correct page order
     const fileNames = Object.keys(content.files).sort();
 
     for (const fileName of fileNames) {
       const fileData = content.files[fileName];
+      
       if (!fileData.dir && !fileName.startsWith('__MACOSX') && !fileName.includes('/.')) {
         const lowerName = fileName.toLowerCase();
         if (lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) {
@@ -127,41 +126,32 @@
   }
 
   async function extractCBR(file) {
-    const data = await file.arrayBuffer();
+    // Use the global Archive object loaded from CDN
+    const archive = await window.Archive.open(file);
+    const extractedObj = await archive.extractFiles();
     
-    // Create extractor with the WASM binary we loaded manually
-    const extractor = await unrar.createExtractorFromData({ 
-      data: data,
-      wasmBinary: unrar.wasmBinary 
-    });
-
-    const list = extractor.getFileList();
-    const fileHeaders = [...list.fileHeaders];
-
     const filesToUpload = [];
     let pageIndex = 1;
 
-    // Sort files naturally (1, 2, 10 instead of 1, 10, 2)
-    const sortedHeaders = fileHeaders.sort((a, b) => 
-      a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+    // The result is an object { "filename": File/Blob, ... }
+    // We need to sort keys to keep order
+    const sortedFilenames = Object.keys(extractedObj).sort((a, b) => 
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
 
-    for (const header of sortedHeaders) {
-      if (header.flags.directory || header.name.startsWith('__MACOSX')) continue;
+    for (const fileName of sortedFilenames) {
+      if (fileName.startsWith('__MACOSX') || fileName.includes('/.')) continue;
       
-      const lowerName = header.name.toLowerCase();
+      const lowerName = fileName.toLowerCase();
       if (!lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) continue;
 
-      const extracted = extractor.extract({ files: [header.name] });
-      const files = [...extracted.files];
+      const fileData = extractedObj[fileName];
+      // libarchive.js returns File objects, which are Blobs
+      const ext = fileName.split('.').pop();
+      const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
       
-      if (files[0] && files[0].extraction) {
-        const ext = header.name.split('.').pop();
-        const blob = new Blob([files[0].extraction]);
-        const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
-        filesToUpload.push({ name: newName, blob });
-        pageIndex++;
-      }
+      filesToUpload.push({ name: newName, blob: fileData });
+      pageIndex++;
     }
 
     return filesToUpload;

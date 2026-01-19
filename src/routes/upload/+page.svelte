@@ -6,20 +6,20 @@
   let isUploading = false;
   let folderPath = "MAD/Love Trouble/Band 01";
   
-  // State for unrar
   let unrarReady = false;
-  let unrarModule = null;
+  let createExtractorFromData = null;
+  let wasmBinary = null;
 
   onMount(async () => {
     try {
-      // CORRECT: Load from /esm path and fetch WASM separately
-      const module = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/dist/js/unrar.js');
+      // CORRECT: Import from /esm path for browser
+      const unrarModule = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/index.js');
+      createExtractorFromData = unrarModule.createExtractorFromData;
       
-      // Fetch WASM binary
-      const wasmResponse = await fetch('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/dist/js/unrar.wasm');
-      const wasmBinary = await wasmResponse.arrayBuffer();
+      // Load WASM binary
+      const wasmResponse = await fetch('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.wasm');
+      wasmBinary = await wasmResponse.arrayBuffer();
       
-      unrarModule = { ...module, wasmBinary };
       unrarReady = true;
       status = "Ready! Drag a .CBZ or .CBR file here.";
 
@@ -63,7 +63,6 @@
     }
   }
 
-  // --- CBZ Processing ---
   async function processCBZ(file, cleanPath) {
     status = "Reading CBZ file...";
     const zip = new JSZip();
@@ -101,20 +100,21 @@
     }
   }
 
-  // --- CBR Processing (node-unrar-js) ---
   async function processCBR(file, cleanPath) {
     status = "Reading CBR file...";
     
     // Read file as ArrayBuffer
     const arrayBuffer = await file.arrayBuffer();
     
-    status = "Extracting CBR archive...";
+    status = "Creating extractor...";
     
-    // Create extractor with WASM binary
-    const extractor = await unrarModule.createExtractorFromData({
+    // Create extractor - data must be ArrayBuffer
+    const extractor = await createExtractorFromData({
       data: arrayBuffer,
-      wasmBinary: unrarModule.wasmBinary
+      wasmBinary: wasmBinary
     });
+    
+    status = "Getting file list...";
     
     // Get file list
     const list = extractor.getFileList();
@@ -138,11 +138,12 @@
 
     status = `Found ${imageHeaders.length} pages. Extracting...`;
 
-    // Extract all files at once
+    // Extract all files
     const extracted = extractor.extract({ 
       files: imageHeaders.map(h => h.name) 
     });
     
+    // IMPORTANT: Must iterate to end to prevent memory leak
     const files = [...extracted.files];
     
     status = `Uploading ${files.length} pages...`;

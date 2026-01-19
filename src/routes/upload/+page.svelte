@@ -12,12 +12,15 @@
 
   onMount(async () => {
     try {
-      // CORRECT: Import from /esm path for browser
+      // Import the specific ESM build
       const unrarModule = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/index.js');
       createExtractorFromData = unrarModule.createExtractorFromData;
       
-      // Load WASM binary
+      // Load WASM binary explicitly
       const wasmResponse = await fetch('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.wasm');
+      
+      if (!wasmResponse.ok) throw new Error("Failed to load WASM binary");
+      
       wasmBinary = await wasmResponse.arrayBuffer();
       
       unrarReady = true;
@@ -25,7 +28,7 @@
 
     } catch (e) {
       console.error("Unrar loading failed:", e);
-      status = "Warning: CBR support failed. CBZ only.";
+      status = "⚠️ Warning: CBR support failed (WASM load error). CBZ only.";
     }
   });
 
@@ -40,7 +43,7 @@
     const isCBR = fileName.endsWith('.cbr');
 
     if (!isCBZ && !isCBR) return alert("Please upload a .cbz or .cbr file!");
-    if (isCBR && !unrarReady) return alert("CBR support is not ready yet.");
+    if (isCBR && !unrarReady) return alert("CBR support is not ready. Reload the page or check console.");
     if (!folderPath) return alert("Please type the target folder path first!");
 
     const cleanPath = folderPath.replace(/\/$/, "");
@@ -72,52 +75,52 @@
         a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     );
 
-    const entries = [];
     let pageIndex = 1;
+    const imagesToUpload = [];
 
+    // Filter first to get total count
     for (const fileName of fileNames) {
       const fileData = content.files[fileName];
-      if (!fileData.dir && !fileName.startsWith('__MACOSX') && !fileName.includes('/.')) {
-        if (fileName.match(/\.(jpg|jpeg|png|webp|gif)$/i)) {
-          const ext = fileName.split('.').pop();
-          entries.push({
-            data: fileData,
-            newName: `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`
-          });
-          pageIndex++;
-        }
+      if (!fileData.dir && !fileName.startsWith('__MACOSX') && !fileName.includes('/.') && fileName.match(/\.(jpg|jpeg|png|webp|gif)$/i)) {
+          imagesToUpload.push({ fileName, fileData });
       }
     }
 
-    if (entries.length === 0) throw new Error("No valid images found!");
-    status = `Found ${entries.length} pages. Starting upload...`;
+    if (imagesToUpload.length === 0) throw new Error("No valid images found!");
+    status = `Found ${imagesToUpload.length} pages. Starting upload...`;
 
-    for (let i = 0; i < entries.length; i++) {
-      const item = entries[i];
-      status = `Uploading ${i + 1}/${entries.length}: ${item.newName}...`;
-      const blob = await item.data.async('blob');
-      await uploadFile(item.newName, blob, cleanPath);
+    // Process sequential upload
+    for (let i = 0; i < imagesToUpload.length; i++) {
+        const item = imagesToUpload[i];
+        const ext = item.fileName.split('.').pop();
+        const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
+        
+        status = `Uploading ${pageIndex}/${imagesToUpload.length}: ${newName}...`;
+        
+        const blob = await item.fileData.async('blob');
+        await uploadFile(newName, blob, cleanPath);
+        pageIndex++;
     }
   }
 
   async function processCBR(file, cleanPath) {
     status = "Reading CBR file...";
-    
-    // Read file as ArrayBuffer
     const arrayBuffer = await file.arrayBuffer();
     
     status = "Creating extractor...";
-    
-    // Create extractor - data must be ArrayBuffer
     const extractor = await createExtractorFromData({
       data: arrayBuffer,
       wasmBinary: wasmBinary
     });
     
-    status = "Getting file list...";
-    
-    // Get file list
+    status = "Scanning file list...";
     const list = extractor.getFileList();
+    
+    // Safety check for encrypted headers
+    if (list.arcHeader && list.arcHeader.flags && list.arcHeader.flags.password) {
+        throw new Error("This CBR file is password protected. Cannot extract.");
+    }
+
     const fileHeaders = [...list.fileHeaders];
     
     // Filter for images
@@ -136,32 +139,34 @@
       a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
     );
 
-    status = `Found ${imageHeaders.length} pages. Extracting...`;
+    status = `Found ${imageHeaders.length} pages. Starting sequential extract...`;
 
-    // Extract all files
-    const extracted = extractor.extract({ 
-      files: imageHeaders.map(h => h.name) 
-    });
-    
-    // IMPORTANT: Must iterate to end to prevent memory leak
-    const files = [...extracted.files];
-    
-    status = `Uploading ${files.length} pages...`;
-
-    // Upload extracted files
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const ext = file.fileHeader.name.split('.').pop();
+    // SEQUENTIAL EXTRACTION AND UPLOAD
+    // Prevents memory leak and browser crash by extracting 1 file at a time
+    for (let i = 0; i < imageHeaders.length; i++) {
+      const header = imageHeaders[i];
+      const ext = header.name.split('.').pop();
       const newName = `page_${String(i + 1).padStart(3, '0')}_de.${ext}`;
+
+      status = `Processing ${i + 1}/${imageHeaders.length}: ${newName}...`;
+
+      // Extract specifically THIS file
+      const extracted = extractor.extract({ files: [header.name] });
       
-      status = `Uploading ${i + 1}/${files.length}: ${newName}...`;
-      
-      // Convert Uint8Array to Blob
-      const blob = new Blob([file.extraction], { 
-        type: `image/${ext === 'jpg' ? 'jpeg' : ext}` 
-      });
-      
-      await uploadFile(newName, blob, cleanPath);
+      // Important: We must consume the iterator to trigger cleanup in the library
+      const files = [...extracted.files];
+
+      if (files.length > 0 && files[0].extraction) {
+          const fileData = files[0];
+          // Convert Uint8Array to Blob
+          const blob = new Blob([fileData.extraction], { 
+            type: `image/${ext === 'jpg' ? 'jpeg' : ext}` 
+          });
+
+          await uploadFile(newName, blob, cleanPath);
+      } else {
+          console.warn(`Failed to extract: ${header.name}`);
+      }
     }
   }
 

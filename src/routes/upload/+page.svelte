@@ -5,28 +5,29 @@
 
   let status = "Loading libraries...";
   let isUploading = false;
-  let folderPath = "MAD/Love Trouble/Band 01"; // Default path
-
-  // Holds our unrar capabilities once loaded
-  let unrar = null; // { createExtractorFromData, wasmBinary }
+  let folderPath = "MAD/Love Trouble/Band 01";
+  
+  // This will hold the unrar function and binary once loaded from CDN
+  let unrar = null; 
 
   onMount(async () => {
     try {
-      status = "Loading Unrar WASM...";
+      status = "Initializing Unrar...";
       
-      // 1. Fetch the WASM binary directly
+      // 1. Fetch the WASM binary from jsDelivr
       const wasmRes = await fetch('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.wasm');
-      if (!wasmRes.ok) throw new Error("Failed to download unrar.wasm");
+      if (!wasmRes.ok) throw new Error("Failed to load WASM binary");
       const wasmBinary = await wasmRes.arrayBuffer();
 
-      // 2. Import the main ESM entry point
+      // 2. Import the library from jsDelivr
+      // We import the specific ESM index to ensure we get the named export
       const mod = await import('https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/index.js');
       
-      if (typeof mod.createExtractorFromData !== 'function') {
-         throw new Error("Module does not export createExtractorFromData");
+      if (!mod.createExtractorFromData) {
+        throw new Error("Library export 'createExtractorFromData' not found");
       }
 
-      // Store them for use in extractCBR
+      // 3. Store for use
       unrar = { 
         createExtractorFromData: mod.createExtractorFromData, 
         wasmBinary 
@@ -34,7 +35,7 @@
 
       status = "Ready! Drag a .CBZ or .CBR file here.";
     } catch (err) {
-      console.error("Failed to load CBR support:", err);
+      console.error("CBR init failed:", err);
       status = "Ready (CBZ only - CBR support failed to load).";
     }
   });
@@ -58,7 +59,7 @@
     }
 
     if (isCBR && !unrar) {
-      alert("CBR support is not available (module failed to load). Please use CBZ.");
+      alert("CBR support is not available. Please use CBZ.");
       return;
     }
 
@@ -67,9 +68,7 @@
       return;
     }
 
-    // Remove trailing slash if user added one
     const cleanPath = folderPath.replace(/\/$/, "");
-
     isUploading = true;
     status = `Extracting ${isCBZ ? 'CBZ' : 'CBR'} file locally...`;
 
@@ -109,21 +108,15 @@
     const content = await zip.loadAsync(file);
     const filesToUpload = [];
     let pageIndex = 1;
-    
-    // Sort file names to ensure correct page order
     const fileNames = Object.keys(content.files).sort();
 
     for (const fileName of fileNames) {
       const fileData = content.files[fileName];
-      
-      // Skip directories and Mac metadata
       if (!fileData.dir && !fileName.startsWith('__MACOSX') && !fileName.includes('/.')) {
         const lowerName = fileName.toLowerCase();
         if (lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) {
           const blob = await fileData.async('blob');
           const ext = fileName.split('.').pop();
-          
-          // Rename: page_001_de.jpg
           const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
           filesToUpload.push({ name: newName, blob });
           pageIndex++;
@@ -134,42 +127,37 @@
   }
 
   async function extractCBR(file) {
-    // 1. Read file as ArrayBuffer
     const data = await file.arrayBuffer();
-
-    // 2. Create the extractor using the loaded module and WASM binary
+    
+    // Create extractor with the WASM binary we loaded manually
     const extractor = await unrar.createExtractorFromData({ 
       data: data,
       wasmBinary: unrar.wasmBinary 
     });
 
-    // 3. Get file list
     const list = extractor.getFileList();
-    const fileHeaders = [...list.fileHeaders]; // Iterate to get all headers
+    const fileHeaders = [...list.fileHeaders];
 
     const filesToUpload = [];
     let pageIndex = 1;
 
-    // 4. Sort headers naturally to ensure page order
+    // Sort files naturally (1, 2, 10 instead of 1, 10, 2)
     const sortedHeaders = fileHeaders.sort((a, b) => 
       a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
     );
 
-    // 5. Extract files one by one
     for (const header of sortedHeaders) {
       if (header.flags.directory || header.name.startsWith('__MACOSX')) continue;
       
       const lowerName = header.name.toLowerCase();
       if (!lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/)) continue;
 
-      // Extract specific file
       const extracted = extractor.extract({ files: [header.name] });
-      const files = [...extracted.files]; // Iterate to get content
+      const files = [...extracted.files];
       
       if (files[0] && files[0].extraction) {
         const ext = header.name.split('.').pop();
         const blob = new Blob([files[0].extraction]);
-        
         const newName = `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`;
         filesToUpload.push({ name: newName, blob });
         pageIndex++;
@@ -191,12 +179,8 @@
     });
 
     if (!res.ok) {
-        // Try to parse error message safely
         let errorMsg = 'Upload failed';
-        try {
-            const err = await res.json();
-            errorMsg = err.error || errorMsg;
-        } catch (e) {}
+        try { const err = await res.json(); errorMsg = err.error || errorMsg; } catch (e) {}
         throw new Error(errorMsg);
     }
   }

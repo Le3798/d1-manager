@@ -2,16 +2,18 @@
   import JSZip from "jszip";
   import { onMount } from "svelte";
 
+  // Local, bundled import (no CDN)
+  import { createExtractorFromData } from "node-unrar-js/esm";
+  import unrarWasmUrl from "node-unrar-js/esm/js/unrar.wasm?url";
+
   let status = "Initializing...";
   let isUploading = false;
   let folderPath = "MAD/Love Trouble/Band 01";
 
   let unrarReady = false;
-  let createExtractorFromData = null;
   let wasmBinary = null;
 
   const IMAGE_EXT_RE = /\.(jpg|jpeg|png|webp|gif)$/i;
-
   const mimeByExt = {
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
@@ -22,24 +24,9 @@
 
   onMount(async () => {
     try {
-      // Load ESM module
-      const unrarModule = await import(
-        "https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/index.js"
-      );
-      createExtractorFromData = unrarModule.createExtractorFromData;
-
-      // Load WASM from the correct path
-      const wasmUrl =
-        "https://cdn.jsdelivr.net/npm/node-unrar-js@2.0.2/esm/js/unrar.wasm";
-      const wasmResponse = await fetch(wasmUrl);
-
-      if (!wasmResponse.ok) {
-        throw new Error(
-          `Failed to load WASM: ${wasmResponse.status} ${wasmResponse.statusText}`
-        );
-      }
-
-      wasmBinary = await wasmResponse.arrayBuffer();
+      const res = await fetch(unrarWasmUrl);
+      if (!res.ok) throw new Error(`Failed to load WASM: ${res.status} ${res.statusText}`);
+      wasmBinary = await res.arrayBuffer();
 
       unrarReady = true;
       status = "Ready. Drag a .CBZ or .CBR file here.";
@@ -108,10 +95,9 @@
 
     for (let i = 0; i < imagesToUpload.length; i++) {
       const item = imagesToUpload[i];
-      const ext = (item.fileName.split(".").pop() || "").toLowerCase();
-      const safeExt = ext || "jpg";
+      const ext = (item.fileName.split(".").pop() || "").toLowerCase() || "jpg";
+      const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
 
-      const newName = `page_${String(i + 1).padStart(3, "0")}_de.${safeExt}`;
       status = `Uploading ${i + 1}/${imagesToUpload.length}: ${newName}...`;
 
       const blob = await item.fileData.async("blob");
@@ -120,9 +106,7 @@
   }
 
   async function processCBR(file, cleanPath) {
-    if (!createExtractorFromData || !wasmBinary) {
-      throw new Error("CBR engine not initialized.");
-    }
+    if (!wasmBinary) throw new Error("CBR engine not initialized.");
 
     status = "Reading CBR file...";
     const arrayBuffer = await file.arrayBuffer();
@@ -135,21 +119,18 @@
 
     status = "Scanning file list...";
     const list = extractor.getFileList();
-
-    // Force iterator evaluation for headers
     const fileHeaders = [...list.fileHeaders];
 
-    // Encryption detection
+    // Encryption detection (better than checking a non-existent flags.password)
     const archiveEncrypted = !!list.arcHeader?.flags?.headerEncrypted;
     const anyFileEncrypted = fileHeaders.some((h) => !!h?.flags?.encrypted);
     if (archiveEncrypted || anyFileEncrypted) {
       throw new Error("This CBR/RAR is encrypted/password-protected. Cannot extract.");
     }
 
-    // Filter to images
     const imageHeaders = fileHeaders
-      .filter((header) => {
-        const name = header?.name;
+      .filter((h) => {
+        const name = h?.name;
         return (
           name &&
           !name.startsWith("__MACOSX") &&
@@ -162,27 +143,22 @@
       );
 
     if (imageHeaders.length === 0) throw new Error("No valid images found.");
-
     status = `Found ${imageHeaders.length} pages. Starting extraction...`;
 
     for (let i = 0; i < imageHeaders.length; i++) {
       const header = imageHeaders[i];
-      const ext = (header.name.split(".").pop() || "").toLowerCase();
-      const safeExt = ext || "jpg";
-      const newName = `page_${String(i + 1).padStart(3, "0")}_de.${safeExt}`;
+      const ext = (header.name.split(".").pop() || "").toLowerCase() || "jpg";
+      const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
 
       status = `Processing ${i + 1}/${imageHeaders.length}: ${newName}...`;
 
-      // Extract only this file
       const extracted = extractor.extract({ files: [header.name] });
       const [arcFile] = [...extracted.files];
 
-      if (!arcFile?.extraction) {
-        throw new Error(`Failed to extract: ${header.name}`);
-      }
+      if (!arcFile?.extraction) throw new Error(`Failed to extract: ${header.name}`);
 
       const blob = new Blob([arcFile.extraction], {
-        type: mimeByExt[safeExt] ?? "application/octet-stream"
+        type: mimeByExt[ext] ?? "application/octet-stream"
       });
 
       await uploadFile(newName, blob, cleanPath);

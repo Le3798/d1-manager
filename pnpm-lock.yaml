@@ -14,6 +14,9 @@ importers:
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
+      node-unrar-js:
+        specifier: ^2.0.2
+        version: 2.0.2
       tesseract.js:
         specifier: ^7.0.0
         version: 7.0.0
@@ -2505,6 +2508,10 @@ packages:
   node-sql-parser@5.3.8:
     resolution: {integrity: sha512-aqGTzK8kPJAwQ6tqdS0l+vX358LXMmZDw902ePfiPn3PSDsg2HeR2tHFioXNHJW00YHoic6VVYY80waFb/zdxw==}
     engines: {node: '>=8'}
+
+  node-unrar-js@2.0.2:
+    resolution: {integrity: sha512-hLNmoJzqaKJnod8yiTVGe9hnlNRHotUi0CreSv/8HtfRi/3JnRC8DvsmKfeGGguRjTEulhZK6zXX5PXoVuDZ2w==}
+    engines: {node: '>=10.0.0'}
 
   npm-run-path@5.3.0:
     resolution: {integrity: sha512-ppwTtiJZq0O/ai0z7yfudtBpWIoxM8yE6nHi1X47eFR2EWORqfbu6CnPlNsjeN683eT0qG6H/Pyf9fCcvjnnnQ==}
@@ -5629,6 +5636,8 @@ snapshots:
     dependencies:
       '@types/pegjs': 0.10.6
       big-integer: 1.6.52
+
+  node-unrar-js@2.0.2: {}
 
   npm-run-path@5.3.0:
     dependencies:

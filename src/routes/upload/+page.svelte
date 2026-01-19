@@ -191,3 +191,35 @@
     }
   }
 </script>
+
+<div style="padding: 2rem; max-width: 600px; margin: 0 auto; font-family: sans-serif;">
+  <h1>Manga Upload Tool</h1>
+  
+  <div style="margin-bottom: 20px;">
+    <label style="display:block; font-weight:bold;">Target Folder Path:</label>
+    <input 
+      type="text" 
+      bind:value={folderPath} 
+      placeholder="e.g. MAD/Love Trouble/Band 01"
+      style="width: 100%; padding: 10px; margin-top:5px;"
+    />
+    <small style="color: #666;">Files will be saved to: <code>{folderPath || '...'}/page_001_de.jpg</code></small>
+  </div>
+
+  <div 
+    on:drop={handleDrop} 
+    on:dragover={(e) => e.preventDefault()}
+    style="border: 3px dashed #ccc; padding: 50px; text-align: center; border-radius: 10px; background: #f9f9f9; transition: background 0.2s;"
+    class:uploading={isUploading}
+  >
+    <h2>{isUploading ? '⏳ Processing...' : '📂 Drag .CBZ or .CBR File Here'}</h2>
+    <p style="white-space: pre-wrap;">{status}</p>
+  </div>
+</div>
+
+<style>
+  .uploading {
+    background: #e6f7ff !important;
+    border-color: #1890ff !important;
+  }
+</style>

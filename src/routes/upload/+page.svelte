@@ -65,29 +65,10 @@
     status = `Scanning ${isCBZ ? 'CBZ' : 'CBR'} structure...`;
 
     try {
-      // Step 1: Get the LIST of files (fast), do not extract content yet
-      let entryList = [];
-
       if (isCBZ) {
-        entryList = await scanCBZ(file);
+        await processCBZ(file, cleanPath);
       } else if (isCBR) {
-        entryList = await scanCBR(file);
-      }
-
-      if (entryList.length === 0) throw new Error("No valid images found!");
-
-      status = `Found ${entryList.length} pages. Starting upload...`;
-      
-      // Step 2: Extract and Upload ONE BY ONE (prevents memory crash)
-      for (let i = 0; i < entryList.length; i++) {
-        const item = entryList[i];
-        status = `Processing ${i + 1}/${entryList.length}: ${item.newName}...`;
-        
-        // Extract ONLY this file now
-        const blob = await extractEntry(item);
-        
-        // Upload
-        await uploadFile(item.newName, blob, cleanPath);
+        await processCBR(file, cleanPath);
       }
 
       status = "✅ Success! All pages uploaded.";
@@ -100,8 +81,8 @@
     }
   }
 
-  // --- CBZ Scanner (JSZip) ---
-  async function scanCBZ(file) {
+  // --- CBZ Processing ---
+  async function processCBZ(file, cleanPath) {
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
     
@@ -119,57 +100,88 @@
         if (fileName.match(/\.(jpg|jpeg|png|webp|gif)$/i)) {
           const ext = fileName.split('.').pop();
           entries.push({
-            type: 'cbz',
-            data: fileData, // Store reference, not blob
+            data: fileData,
             newName: `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`
           });
           pageIndex++;
         }
       }
     }
-    return entries;
-  }
 
-  // --- CBR Scanner (LibArchive) ---
-  async function scanCBR(file) {
-    const archive = await Archive.open(file);
-    
-    // key fix: getFilesArray() only reads headers, doesn't extract data
-    const fileArray = await archive.getFilesArray(); 
-    
-    // Filter for images
-    const imageFiles = fileArray.filter(item => {
-        const name = item.file.name;
-        return name && !name.startsWith('__MACOSX') && name.match(/\.(jpg|jpeg|png|webp|gif)$/i);
-    });
+    if (entries.length === 0) throw new Error("No valid images found!");
+    status = `Found ${entries.length} pages. Starting upload...`;
 
-    // Natural Sort
-    imageFiles.sort((a, b) => 
-      a.file.name.localeCompare(b.file.name, undefined, { numeric: true, sensitivity: 'base' })
-    );
-
-    const entries = [];
-    let pageIndex = 1;
-
-    for (const item of imageFiles) {
-      const ext = item.file.name.split('.').pop();
-      entries.push({
-        type: 'cbr',
-        data: item.file, // This is a CompressedFile object
-        newName: `page_${String(pageIndex).padStart(3, '0')}_de.${ext}`
-      });
-      pageIndex++;
+    for (let i = 0; i < entries.length; i++) {
+      const item = entries[i];
+      status = `Processing ${i + 1}/${entries.length}: ${item.newName}...`;
+      const blob = await item.data.async('blob');
+      await uploadFile(item.newName, blob, cleanPath);
     }
-    
-    return entries;
   }
 
-  // --- Unified Extractor ---
-  async function extractEntry(entry) {
-    if (entry.type === 'cbz') {
-      return await entry.data.async('blob');
-    } else {
-      return await entry.data.extract(); // Extracts single file from CBR
+  // --- CBR Processing (FIXED) ---
+  async function processCBR(file, cleanPath) {
+    let archive = null;
+    
+    try {
+      status = "Opening CBR archive...";
+      archive = await Archive.open(file);
+      
+      status = "Reading file list...";
+      
+      // CRITICAL FIX: Use timeout to prevent UI freeze
+      const fileArray = await Promise.race([
+        archive.getFilesArray(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("Archive reading timeout")), 30000)
+        )
+      ]);
+      
+      // Filter for images
+      const imageFiles = fileArray.filter(item => {
+        const name = item.file.name;
+        return name && 
+               !name.startsWith('__MACOSX') && 
+               !name.startsWith('.') &&
+               name.match(/\.(jpg|jpeg|png|webp|gif)$/i);
+      });
+
+      if (imageFiles.length === 0) throw new Error("No valid images found!");
+
+      // Natural Sort
+      imageFiles.sort((a, b) => 
+        a.file.name.localeCompare(b.file.name, undefined, { numeric: true, sensitivity: 'base' })
+      );
+
+      status = `Found ${imageFiles.length} pages. Starting upload...`;
+
+      // Extract and upload one by one
+      for (let i = 0; i < imageFiles.length; i++) {
+        const item = imageFiles[i];
+        const ext = item.file.name.split('.').pop();
+        const newName = `page_${String(i + 1).padStart(3, '0')}_de.${ext}`;
+        
+        status = `Extracting ${i + 1}/${imageFiles.length}: ${newName}...`;
+        
+        // Extract single file
+        const blob = await item.file.extract();
+        
+        status = `Uploading ${i + 1}/${imageFiles.length}: ${newName}...`;
+        await uploadFile(newName, blob, cleanPath);
+        
+        // Allow UI to breathe between files
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+    } finally {
+      // CRITICAL FIX: Always close the archive to free memory
+      if (archive) {
+        try {
+          await archive.close();
+        } catch (e) {
+          console.warn("Archive close warning:", e);
+        }
+      }
     }
   }
 
@@ -186,7 +198,10 @@
 
     if (!res.ok) {
         let errorMsg = 'Upload failed';
-        try { const err = await res.json(); errorMsg = err.error || errorMsg; } catch (e) {}
+        try { 
+          const err = await res.json(); 
+          errorMsg = err.error || errorMsg; 
+        } catch (e) {}
         throw new Error(errorMsg);
     }
   }
@@ -218,8 +233,8 @@
 </div>
 
 <style>
-    .uploading {
-        background: #e6f7ff !important;
-        border-color: #1890ff !important;
-    }
+  .uploading {
+    background: #e6f7ff !important;
+    border-color: #1890ff !important;
+  }
 </style>

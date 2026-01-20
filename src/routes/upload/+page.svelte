@@ -8,6 +8,7 @@
   interface QueueItem {
     id: string;
     name: string;
+    type: 'file' | 'folder';
     status: 'pending' | 'scanning' | 'uploading' | 'done' | 'error';
     progress: number;
     total: number;
@@ -19,12 +20,12 @@
   let uploadQueue: QueueItem[] = [];
   let isProcessing = false;
   
-  // NEW: Inputs for toggle
+  // Inputs
   let fileInput: HTMLInputElement; 
   let folderInput: HTMLInputElement;
   let uploadMode: 'files' | 'folder' = 'files'; 
 
-  // --- THEMES LIST ---
+  // --- THEMES ---
   const themes = [
     "light", "dark", "cupcake", "bumblebee", "emerald", "corporate",
     "synthwave", "retro", "cyberpunk", "valentine", "halloween", "garden",
@@ -33,30 +34,24 @@
     "night", "coffee", "winter", "dim", "nord", "sunset",
   ];
 
-  // --- UNRAR / WASM SETUP ---
+  // --- UNRAR / WASM ---
   let unrarReady = false;
   let wasmBinary: ArrayBuffer | null = null;
   let createExtractorFromData: null | ((opts: any) => Promise<any>) = null;
 
   const IMAGE_EXT_RE = /\.(jpg|jpeg|png|webp|gif)$/i;
   const mimeByExt: Record<string, string> = {
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    png: "image/png",
-    webp: "image/webp",
-    gif: "image/gif",
+    jpg: "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"
   };
 
   onMount(async () => {
     if (!browser) return;
     themeChange(false);
-
     try {
       const unrar = await import("node-unrar-js");
       createExtractorFromData = unrar.createExtractorFromData;
       const wasmMod = await import("node-unrar-js/esm/js/unrar.wasm?url");
-      const unrarWasmUrl = wasmMod.default as string;
-      const res = await fetch(unrarWasmUrl);
+      const res = await fetch(wasmMod.default as string);
       if (!res.ok) throw new Error(`Failed to load WASM: ${res.status}`);
       wasmBinary = await res.arrayBuffer();
       unrarReady = true;
@@ -69,288 +64,283 @@
     return path.startsWith("MAD/");
   }
 
-  // --- CLICK HANDLER (FIXED) ---
+  // --- CLICK HANDLER ---
   function openFileBrowser() {
-    if (uploadMode === 'folder') {
-      if (folderInput) folderInput.click();
-    } else {
-      if (fileInput) fileInput.click();
-    }
+    uploadMode === 'folder' ? folderInput.click() : fileInput.click();
   }
 
-  // --- FILE INPUT HANDLER (FIXED) ---
-  // This handles BOTH file and folder inputs
+  // --- INPUT CHANGE HANDLER (Click) ---
   function handleFileInputChange(event: Event) {
     const input = event.target as HTMLInputElement;
-    const files = input.files;
+    if (!input.files || input.files.length === 0) return;
     
-    if (!files || files.length === 0) return;
+    const files = Array.from(input.files);
+    const isFolderUpload = input.webkitdirectory; // true if it was the folder input
 
-    const cleanBasePath = basePath.trim().replace(/\/$/, "");
-    const fileArray = Array.from(files); // Convert FileList to Array
-    
-    // Create initial queue items
-    const newItems: QueueItem[] = fileArray.map((file) => ({
-      id: crypto.randomUUID(),
-      name: file.name, // Note: folders via input might lose structure here, see processFileListQueue
-      status: 'pending',
-      progress: 0,
-      total: 0,
-      message: 'Waiting...'
-    }));
-    uploadQueue = [...uploadQueue, ...newItems];
+    if (isFolderUpload) {
+        // GROUP BY FOLDER: Identify distinct top-level folders
+        const folders = new Map<string, File[]>();
+        
+        files.forEach(f => {
+            const path = f.webkitRelativePath || f.name;
+            const rootFolder = path.split('/')[0];
+            if (!folders.has(rootFolder)) folders.set(rootFolder, []);
+            folders.get(rootFolder)!.push(f);
+        });
 
-    if (!isProcessing) processFileListQueue(cleanBasePath, fileArray);
-    
-    // IMPORTANT: Reset input value to allow selecting same files again
-    input.value = ''; 
-  }
+        const newItems: QueueItem[] = Array.from(folders.keys()).map(folderName => ({
+            id: crypto.randomUUID(),
+            name: folderName,
+            type: 'folder',
+            status: 'pending',
+            progress: 0,
+            total: folders.get(folderName)!.length,
+            message: 'Waiting...'
+        }));
+        
+        const startIndex = uploadQueue.length;
+        uploadQueue = [...uploadQueue, ...newItems];
 
-  // --- PROCESS FILE LIST (Use webkitRelativePath for Folders) ---
-  async function processFileListQueue(basePath: string, files: File[]) {
-    isProcessing = true;
-    const startIndex = uploadQueue.length - files.length;
+        // Process each folder job
+        Array.from(folders.keys()).forEach((folderName, i) => {
+            processBatch(uploadQueue[startIndex + i].id, folders.get(folderName)!, basePath);
+        });
 
-    for (let i = 0; i < files.length; i++) {
-      const queueIndex = startIndex + i;
-      const file = files[i];
-      updateItem(queueIndex, { status: 'scanning', message: 'Processing...' });
+    } else {
+        // FILES: Add individually
+        const newItems: QueueItem[] = files.map(f => ({
+            id: crypto.randomUUID(),
+            name: f.name,
+            type: 'file',
+            status: 'pending',
+            progress: 0,
+            total: 1,
+            message: 'Waiting...'
+        }));
+        
+        const startIndex = uploadQueue.length;
+        uploadQueue = [...uploadQueue, ...newItems];
 
-      try {
-        // Handle "Manga Mode" pathing
-        if (isMangaMode(basePath)) {
-             // For files uploaded via folder input, use webkitRelativePath if available
-             // webkitRelativePath looks like: "FolderName/file.jpg"
-             const relPath = file.webkitRelativePath || file.name;
-             const pathParts = relPath.split('/');
-             
-             // If deep structure (Folder/File), we need the parent folder name
-             let folderName = "";
-             if (pathParts.length > 1) {
-                folderName = pathParts[0]; // Top-level folder
-             } else {
-                folderName = file.name.replace(/\.[^/.]+$/, ""); // Fallback for root files
-             }
-
-             const targetPath = `${basePath}/${folderName}`;
-             
-             // Check extensions
-             const name = file.name.toLowerCase();
-             if (name.endsWith(".cbz")) {
-                 await processCBZ(file, targetPath, queueIndex);
-             } else if (name.endsWith(".cbr")) {
-                 if (!unrarReady) throw new Error("CBR engine not ready");
-                 await processCBR(file, targetPath, queueIndex);
-             } else if (IMAGE_EXT_RE.test(name)) {
-                 // It's an image in a folder (Manga Mode)
-                 // We need to rename it to page_XXX
-                 // ISSUE: In bulk upload, 'i' is the global index. 
-                 // We probably want per-folder indexing, but that's complex in linear queue.
-                 // Simple Fix: Rename using its original name or a timestamp to avoid collision, 
-                 // OR stick to page_XXX if we assume 1 folder = 1 chapter.
-                 
-                 // Let's assume standard behavior: Rename to page_XXX based on file list order
-                 const ext = (name.split(".").pop() || "").toLowerCase() || "jpg";
-                 // Using 'i+1' here might rename across multiple chapters if uploaded together.
-                 // For safety in this specific "Universal" tool, let's keep original name if ambiguous, 
-                 // OR force page_XXX. 
-                 // Let's force page_XXX for now as requested.
-                 const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
-                 await uploadFile(newName, file, targetPath);
-             } else {
-                 throw new Error("Manga Mode: Ignored non-image/archive");
-             }
-
-        } else {
-             // BOOK MODE: Simple Upload
-             // Use webkitRelativePath to preserve folder structure if it exists
-             // e.g. "MyBook/Chapter1/text.txt" -> uploads to "BasePath/MyBook/Chapter1/text.txt"
-             
-             const relPath = file.webkitRelativePath || file.name;
-             // If basePath is set, prepend it. If not, use relPath directly.
-             const finalPath = basePath ? `${basePath}/${relPath}` : relPath;
-             
-             // We need to separate filename from path for the uploadFile function
-             // uploadFile takes (filename, blob, folderPath)
-             const lastSlash = finalPath.lastIndexOf('/');
-             const folderPath = lastSlash !== -1 ? finalPath.substring(0, lastSlash) : "";
-             const fileName = lastSlash !== -1 ? finalPath.substring(lastSlash + 1) : finalPath;
-
-             await uploadFile(fileName, file, folderPath);
-        }
-
-        updateItem(queueIndex, { status: 'done', message: 'Completed' });
-      } catch (err: any) {
-        console.error(err);
-        updateItem(queueIndex, { status: 'error', message: err.message || 'Failed' });
-      }
+        // Process each file job
+        files.forEach((f, i) => {
+            processSingleFile(uploadQueue[startIndex + i].id, f, basePath);
+        });
     }
-    isProcessing = false;
+    input.value = '';
   }
 
-  // --- DRAG & DROP HANDLERS (Unchanged - they work) ---
+  // --- DRAG & DROP HANDLER ---
   async function handleDrop(event: DragEvent) {
     event.preventDefault();
-    const cleanBasePath = basePath.trim().replace(/\/$/, "");
     const items = event.dataTransfer?.items;
-    if (!items || items.length === 0) return alert("Please upload files/folders.");
+    if (!items) return;
 
     const entries: FileSystemEntry[] = [];
     for (let i = 0; i < items.length; i++) {
-      const entry = items[i].webkitGetAsEntry();
-      if (entry) entries.push(entry);
+        const entry = items[i].webkitGetAsEntry();
+        if (entry) entries.push(entry);
     }
-    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-
-    const newItems: QueueItem[] = entries.map((entry) => ({
-      id: crypto.randomUUID(),
-      name: entry.name,
-      status: 'pending',
-      progress: 0,
-      total: 0,
-      message: 'Waiting...'
+    
+    // Create Jobs
+    const newItems: QueueItem[] = entries.map(e => ({
+        id: crypto.randomUUID(),
+        name: e.name,
+        type: e.isDirectory ? 'folder' : 'file',
+        status: 'pending',
+        progress: 0,
+        total: 0, 
+        message: 'Scanning...'
     }));
+    
+    const startIndex = uploadQueue.length;
     uploadQueue = [...uploadQueue, ...newItems];
 
-    if (!isProcessing) processQueue(cleanBasePath, entries);
-  }
-
-  async function processQueue(basePath: string, entries: FileSystemEntry[]) {
-    isProcessing = true;
-    const startIndex = uploadQueue.length - entries.length;
-
-    for (let i = 0; i < entries.length; i++) {
-      const queueIndex = startIndex + i;
-      const entry = entries[i];
-      updateItem(queueIndex, { status: 'scanning', message: 'Scanning...' });
-
-      try {
+    // Process Jobs
+    entries.forEach((entry, i) => {
+        const jobId = uploadQueue[startIndex + i].id;
         if (entry.isDirectory) {
-          await processDirectoryEntry(entry as FileSystemDirectoryEntry, basePath, queueIndex);
-        } else if (entry.isFile) {
-          const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
-          await processFileEntry(file, basePath, queueIndex);
+            processDirectoryEntry(jobId, entry as FileSystemDirectoryEntry, basePath);
+        } else {
+            // Need to get File object from Entry
+            (entry as FileSystemFileEntry).file((f) => {
+                processSingleFile(jobId, f, basePath);
+            });
         }
-        updateItem(queueIndex, { status: 'done', message: 'Completed' });
-      } catch (err: any) {
-        console.error(err);
-        updateItem(queueIndex, { status: 'error', message: err.message || 'Failed' });
-      }
-    }
-    isProcessing = false;
+    });
   }
 
-  function updateItem(index: number, updates: Partial<QueueItem>) {
-    uploadQueue[index] = { ...uploadQueue[index], ...updates };
-  }
-
-  // --- WORKER HANDLERS (Used by Drag & Drop) ---
-  async function processDirectoryEntry(entry: FileSystemDirectoryEntry, basePath: string, qIdx: number) {
-    const isManga = isMangaMode(basePath);
-    const targetPath = basePath ? basePath : entry.name; // Keep structure
-    const files = await readAllDirectoryEntries(entry);
+  // --- LOGIC: PROCESS BATCH (Folder) ---
+  async function processBatch(jobId: string, files: File[], basePath: string) {
+    updateItem(jobId, { status: 'uploading', total: files.length, message: 'Starting...' });
     
-    let validFiles: FileSystemFileEntry[];
-    if (isManga) {
-        validFiles = files
-            .filter((f) => !f.name.startsWith(".") && IMAGE_EXT_RE.test(f.name))
-            .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-    } else {
-        validFiles = files
-            .filter((f) => !f.name.startsWith("."))
-            .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+    for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        updateItem(jobId, { progress: i + 1, message: `Uploading ${f.name}...` });
+        
+        try {
+            const relPath = f.webkitRelativePath || f.name;
+            let targetPath = basePath;
+            let finalName = f.name;
+
+            // MANGA MODE LOGIC
+            if (isMangaMode(basePath)) {
+                 // Manga: basePath/FolderName/page_001.jpg
+                 // Group Logic: The "folder" is the root of the batch.
+                 // relPath: "One Piece/Chapter 1/page.jpg"
+                 const parts = relPath.split('/');
+                 const folderName = parts.length > 1 ? parts.slice(0, -1).join('/') : ""; 
+                 
+                 // If dragging a folder "Chapter 1", relPath is "Chapter 1/img.jpg"
+                 // targetPath should be basePath/Chapter 1
+                 targetPath = `${basePath}/${folderName}`;
+                 
+                 // Rename logic
+                 if (IMAGE_EXT_RE.test(f.name)) {
+                     const ext = (f.name.split(".").pop() || "").toLowerCase() || "jpg";
+                     // Simple counter-based rename within this batch isn't perfect if folders are nested, 
+                     // but assuming flat chapter folders:
+                     finalName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
+                 }
+            } else {
+                // BOOK MODE LOGIC
+                // Preserve full relative path structure
+                // uploadFile takes (filename, file, folderPath)
+                // We want: basePath/RelPath/File
+                const fullPath = basePath ? `${basePath}/${relPath}` : relPath;
+                const lastSlash = fullPath.lastIndexOf('/');
+                targetPath = lastSlash !== -1 ? fullPath.substring(0, lastSlash) : "";
+                finalName = f.name;
+            }
+
+            await uploadFile(finalName, f, targetPath);
+
+        } catch (e: any) {
+            console.error(e);
+            // Don't fail the whole folder for one file, just log? 
+            // Or maybe mark error. For now continue.
+        }
     }
+    updateItem(jobId, { status: 'done', message: 'Completed' });
+  }
 
-    if (validFiles.length === 0) throw new Error("No valid files found in folder");
-    updateItem(qIdx, { status: 'uploading', total: validFiles.length, message: 'Uploading...' });
+  // --- LOGIC: PROCESS SINGLE FILE ---
+  async function processSingleFile(jobId: string, file: File, basePath: string) {
+    updateItem(jobId, { status: 'uploading', total: 1, message: 'Processing...' });
+    
+    try {
+        const name = file.name.toLowerCase();
+        let targetPath = basePath;
 
-    for (let i = 0; i < validFiles.length; i++) {
-      const fileEntry = validFiles[i];
-      const file = await new Promise<File>((resolve, reject) => fileEntry.file(resolve, reject));
-      
-      let finalName: string;
-      if (isManga) {
-         const ext = (file.name.split(".").pop() || "").toLowerCase() || "jpg";
-         finalName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
-      } else {
-         finalName = file.name;
-      }
-      
-      updateItem(qIdx, { progress: i + 1, message: `Uploading ${finalName}...` });
-      await uploadFile(finalName, file, targetPath);
+        // MANGA MODE CHECKS
+        if (isMangaMode(basePath)) {
+            const folderName = file.name.replace(/\.[^/.]+$/, "");
+            targetPath = `${basePath}/${folderName}`;
+            
+            if (name.endsWith(".cbz")) {
+                await processCBZ(jobId, file, targetPath); // CBZ handles its own progress updates
+                return;
+            } else if (name.endsWith(".cbr")) {
+                if (!unrarReady) throw new Error("CBR engine not ready");
+                await processCBR(jobId, file, targetPath);
+                return;
+            }
+            // Strict Manga Mode: Reject loose files? Or allow?
+            // Original code threw error. Let's keep it consistent.
+            throw new Error("Manga Mode: Single files must be .cbz/.cbr");
+        } 
+        
+        // BOOK MODE
+        await uploadFile(file.name, file, basePath);
+        updateItem(jobId, { progress: 1, status: 'done', message: 'Done' });
+
+    } catch (e: any) {
+        updateItem(jobId, { status: 'error', message: e.message });
     }
   }
 
-  // Used by Drag & Drop (Single File)
-  async function processFileEntry(file: File, basePath: string, qIdx: number) {
-    const isManga = isMangaMode(basePath);
-    const name = file.name.toLowerCase();
-
-    if (isManga) {
-        const folderName = file.name.replace(/\.[^/.]+$/, ""); 
-        const targetPath = `${basePath}/${folderName}`;
-        if (name.endsWith(".cbz")) { await processCBZ(file, targetPath, qIdx); return; }
-        else if (name.endsWith(".cbr")) { if (!unrarReady) throw new Error("CBR engine not ready"); await processCBR(file, targetPath, qIdx); return; }
-        throw new Error("Manga Mode: Only Folders, .cbz, or .cbr allowed.");
-    } 
-
-    const targetPath = basePath || "";
-    updateItem(qIdx, { status: 'uploading', total: 1, message: 'Uploading single file...' });
-    await uploadFile(file.name, file, targetPath);
-    updateItem(qIdx, { progress: 1, message: 'Uploaded' });
+  // --- LOGIC: DIRECTORY ENTRY (Drag & Drop Folder) ---
+  async function processDirectoryEntry(jobId: string, entry: FileSystemDirectoryEntry, basePath: string) {
+    updateItem(jobId, { message: 'Scanning directory...' });
+    const entries = await readAllDirectoryEntries(entry); // Recursive read
+    
+    // Convert Entries to Files
+    const files: File[] = [];
+    for (const e of entries) {
+        const f = await new Promise<File>((resolve) => e.file(resolve));
+        // Manually patch webkitRelativePath because File from Entry lacks it often
+        // entry.fullPath is like "/Folder/File.txt"
+        Object.defineProperty(f, 'webkitRelativePath', {
+            value: e.fullPath.substring(1) // Remove leading slash
+        });
+        files.push(f);
+    }
+    
+    // Reuse the Batch Logic
+    await processBatch(jobId, files, basePath);
   }
 
-  async function processCBZ(file: File, targetPath: string, qIdx: number) {
-    updateItem(qIdx, { message: 'Reading Zip...' });
+  // --- CBZ/CBR HANDLERS (Unchanged logic, just updated arg signature) ---
+  async function processCBZ(jobId: string, file: File, targetPath: string) {
+    updateItem(jobId, { message: 'Unzipping...' });
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
-    const fileNames = Object.keys(content.files).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
-    const images = [];
-    for (const name of fileNames) {
-      const entry = content.files[name];
-      if (!entry.dir && !name.startsWith("__MACOSX") && !name.includes("/.") && IMAGE_EXT_RE.test(name)) images.push({ name, entry });
+    const files = Object.values(content.files).filter(e => !e.dir && IMAGE_EXT_RE.test(e.name));
+    
+    updateItem(jobId, { total: files.length, message: 'Uploading...' });
+    
+    // Sort logic (optional but good)
+    files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    for (let i = 0; i < files.length; i++) {
+        const entry = files[i];
+        const blob = await entry.async("blob");
+        const ext = entry.name.split('.').pop() || 'jpg';
+        const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
+        
+        updateItem(jobId, { progress: i + 1, message: `Uploading ${i+1}/${files.length}` });
+        await uploadFile(newName, blob, targetPath);
     }
-    if (images.length === 0) throw new Error("No images in Zip");
-    updateItem(qIdx, { status: 'uploading', total: images.length, message: 'Starting upload...' });
-    for (let i = 0; i < images.length; i++) {
-      const item = images[i];
-      const ext = (item.name.split(".").pop() || "").toLowerCase() || "jpg";
-      const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
-      updateItem(qIdx, { progress: i + 1, message: `Uploading ${i + 1}/${images.length}` });
-      const blob = await item.entry.async("blob");
-      await uploadFile(newName, blob, targetPath);
-    }
+    updateItem(jobId, { status: 'done', message: 'Completed' });
   }
 
-  async function processCBR(file: File, targetPath: string, qIdx: number) {
-    updateItem(qIdx, { message: 'Initializing Unrar...' });
-    const arrayBuffer = await file.arrayBuffer();
-    const extractor = await createExtractorFromData!({ data: arrayBuffer, wasmBinary });
-    updateItem(qIdx, { message: 'Scanning RAR headers...' });
-    const list = extractor.getFileList();
-    const imageHeaders = [...list.fileHeaders].filter((h: any) => h.name && !h.name.startsWith("__MACOSX") && !h.name.startsWith(".") && IMAGE_EXT_RE.test(h.name)).sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-    if (imageHeaders.length === 0) throw new Error("No images in RAR");
-    updateItem(qIdx, { status: 'uploading', total: imageHeaders.length, message: 'Extracting & Uploading...' });
-    for (let i = 0; i < imageHeaders.length; i++) {
-      const header = imageHeaders[i];
-      const ext = (header.name.split(".").pop() || "").toLowerCase() || "jpg";
-      const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
-      updateItem(qIdx, { progress: i + 1, message: `Processing ${i+1}/${imageHeaders.length}` });
-      const extracted = extractor.extract({ files: [header.name] });
-      const [arcFile] = [...extracted.files];
-      if (arcFile?.extraction) {
-        const blob = new Blob([arcFile.extraction], { type: mimeByExt[ext] ?? "application/octet-stream" });
-        await uploadFile(newName, blob, targetPath);
-      }
+  async function processCBR(jobId: string, file: File, targetPath: string) {
+    updateItem(jobId, { message: 'Unrar...' });
+    const ab = await file.arrayBuffer();
+    const extractor = await createExtractorFromData!({ data: ab, wasmBinary });
+    const list = extractor.getFileList().fileHeaders.filter((h: any) => !h.flags.directory && IMAGE_EXT_RE.test(h.name));
+    
+    updateItem(jobId, { total: list.length, message: 'Uploading...' });
+    
+    // Sort
+    list.sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    for (let i = 0; i < list.length; i++) {
+        const h = list[i];
+        const extracted = extractor.extract({ files: [h.name] });
+        const [arc] = [...extracted.files];
+        if (arc.extraction) {
+             const ext = h.name.split('.').pop() || 'jpg';
+             const blob = new Blob([arc.extraction], { type: mimeByExt[ext] || 'image/jpeg' });
+             const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
+             
+             updateItem(jobId, { progress: i + 1, message: `Uploading ${i+1}/${list.length}` });
+             await uploadFile(newName, blob, targetPath);
+        }
     }
+    updateItem(jobId, { status: 'done', message: 'Completed' });
+  }
+
+  // --- HELPERS ---
+  function updateItem(id: string, updates: Partial<QueueItem>) {
+    uploadQueue = uploadQueue.map(item => item.id === id ? { ...item, ...updates } : item);
   }
 
   async function uploadFile(filename: string, blob: Blob | File, path: string) {
-    const formData = new FormData();
-    formData.append("file", blob);
-    formData.append("filename", filename);
-    formData.append("folderPath", path);
-    const res = await fetch("/api/upload-r2", { method: "POST", body: formData });
+    const fd = new FormData();
+    fd.append("file", blob);
+    fd.append("filename", filename);
+    fd.append("folderPath", path);
+    const res = await fetch("/api/upload-r2", { method: "POST", body: fd });
     if (!res.ok) throw new Error("Upload failed");
   }
 
@@ -362,6 +352,13 @@
       if (batch.length > 0) { entries = entries.concat(batch); await readBatch(); }
     };
     await readBatch();
+    // Recursion for subdirectories
+    for (const entry of entries) {
+        if (entry.isDirectory) {
+            const subEntries = await readAllDirectoryEntries(entry as FileSystemDirectoryEntry);
+            entries = entries.concat(subEntries);
+        }
+    }
     return entries.filter(e => e.isFile) as FileSystemFileEntry[];
   }
 </script>
@@ -389,7 +386,7 @@
         <input
           type="text"
           bind:value={basePath}
-          placeholder="e.g. MAD/One Piece OR Immobilienkaufleute Band 1 2022 (or leave blank for root)"
+          placeholder="e.g. MAD/One Piece OR Books/History (leave blank for root)"
           class="input input-bordered w-full bg-base-200 focus:input-primary"
         />
         <label class="label pt-3">
@@ -423,9 +420,8 @@
     </div>
   </div>
 
-  <!-- HIDDEN INPUTS (Fixed bindings) -->
+  <!-- HIDDEN INPUTS -->
   <input type="file" bind:this={fileInput} on:change={handleFileInputChange} multiple class="hidden" />
-  <!-- Folder input needs webkitdirectory for Chrome/Safari desktop -->
   <input type="file" bind:this={folderInput} on:change={handleFileInputChange} webkitdirectory mozdirectory class="hidden" />
 
   <!-- DROP ZONE -->
@@ -466,7 +462,7 @@
             </div>
             <div class="w-full bg-base-300 rounded-full h-2.5 mb-2">
               <div class="h-2.5 rounded-full transition-all duration-300" 
-                class:bg-primary={job.status !== 'error' && job.status !== 'done'}               
+                class:bg-primary={job.status !== 'error' && job.status !== 'done'}
                 class:bg-success={job.status === 'done'}
                 class:bg-error={job.status === 'error'}
                 style="width: {job.total ? (job.progress / job.total) * 100 : 0}%"

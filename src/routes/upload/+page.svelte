@@ -466,7 +466,8 @@
             </div>
             <div class="w-full bg-base-300 rounded-full h-2.5 mb-2">
               <div class="h-2.5 rounded-full transition-all duration-300" 
-                class:bg-primary={job.status !== 'error' && job.status !== 'done'}\n                class:bg-success={job.status === 'done'}
+                class:bg-primary={job.status !== 'error' && job.status !== 'done'}               
+                class:bg-success={job.status === 'done'}
                 class:bg-error={job.status === 'error'}
                 style="width: {job.total ? (job.progress / job.total) * 100 : 0}%"
               ></div>

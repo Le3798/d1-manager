@@ -10,9 +10,12 @@
     @apply relative font-sans;
 }
 
+/* DELETE or COMMENT OUT this section */
+/*
 *::-webkit-scrollbar {
     @apply hidden;
 }
+*/
 
 html,
 body {

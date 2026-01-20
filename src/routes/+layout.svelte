@@ -14,7 +14,7 @@
   }
 </script>
 
-<div class="min-h-screen bg-base-200 flex flex-col font-sans text-base-content">
+<div class="h-full overflow-y-auto bg-base-200 flex flex-col font-sans text-base-content">
   <!-- NAVBAR -->
   <div class="navbar bg-base-100 shadow-md px-4">
     <div class="navbar-start">

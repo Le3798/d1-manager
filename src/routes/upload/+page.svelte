@@ -18,6 +18,7 @@
   let basePath = "";
   let uploadQueue: QueueItem[] = [];
   let isProcessing = false;
+  let fileInput: HTMLInputElement; // Reference to hidden file input
 
   // --- THEMES LIST ---
   const themes = [
@@ -65,11 +66,58 @@
     return path.startsWith("MAD/");
   }
 
+  // --- FILE INPUT HANDLER (NEW) ---
+  function handleFileInputChange(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const files = input.files;
+    if (!files || files.length === 0) return;
+
+    const cleanBasePath = basePath.trim().replace(/\/$/, "");
+    
+    // Convert FileList to File array
+    const fileArray = Array.from(files);
+    
+    const newItems: QueueItem[] = fileArray.map((file) => ({
+      id: crypto.randomUUID(),
+      name: file.name,
+      status: 'pending',
+      progress: 0,
+      total: 0,
+      message: 'Waiting...'
+    }));
+    uploadQueue = [...uploadQueue, ...newItems];
+
+    if (!isProcessing) processFileListQueue(cleanBasePath, fileArray);
+    
+    // Reset input so the same file can be selected again
+    input.value = '';
+  }
+
+  // --- PROCESS FILE LIST (from file input, not drag-drop) ---
+  async function processFileListQueue(basePath: string, files: File[]) {
+    isProcessing = true;
+    const startIndex = uploadQueue.length - files.length;
+
+    for (let i = 0; i < files.length; i++) {
+      const queueIndex = startIndex + i;
+      const file = files[i];
+      updateItem(queueIndex, { status: 'scanning', message: 'Scanning...' });
+
+      try {
+        await processFileEntry(file, basePath, queueIndex);
+        updateItem(queueIndex, { status: 'done', message: 'Completed' });
+      } catch (err: any) {
+        console.error(err);
+        updateItem(queueIndex, { status: 'error', message: err.message || 'Failed' });
+      }
+    }
+    isProcessing = false;
+  }
+
   // --- MAIN DROP HANDLER ---
   async function handleDrop(event: DragEvent) {
     event.preventDefault();
     
-    // FIXED: Allow blank basePath for root-level uploads
     const cleanBasePath = basePath.trim().replace(/\/$/, "");
     
     const items = event.dataTransfer?.items;
@@ -128,9 +176,6 @@
   // --- DIRECTORY PROCESSING ---
   async function processDirectoryEntry(entry: FileSystemDirectoryEntry, basePath: string, qIdx: number) {
     const isManga = isMangaMode(basePath);
-    
-    // FIXED: Upload directly into basePath WITHOUT creating duplicate folder
-    // If basePath is empty, use just the folder name
     const targetPath = basePath ? basePath : entry.name;
     
     const files = await readAllDirectoryEntries(entry);
@@ -188,7 +233,7 @@
     } 
 
     // BOOK MODE: Upload single file
-    const targetPath = basePath || ""; // If basePath is empty, upload to root
+    const targetPath = basePath || "";
     updateItem(qIdx, { status: 'uploading', total: 1, message: 'Uploading single file...' });
     await uploadFile(file.name, file, targetPath);
     updateItem(qIdx, { progress: 1, message: 'Uploaded' });
@@ -265,11 +310,16 @@
     await readBatch();
     return entries.filter(e => e.isFile) as FileSystemFileEntry[];
   }
+
+  // --- CLICK TO BROWSE (NEW) ---
+  function openFileBrowser() {
+    fileInput.click();
+  }
 </script>
 
 <div class="container mx-auto p-4 max-w-4xl font-sans text-base-content pb-20">
   
-  <!-- HEADER: FIXED - Title centered properly -->
+  <!-- HEADER -->
   <div class="flex items-center mb-6 gap-4">
     <div class="flex-1"></div>
     <h1 class="text-3xl font-bold text-center">Universal Upload Tool</h1>
@@ -283,7 +333,7 @@
     </div>
   </div>
 
-  <!-- INPUT SECTION: FIXED - Added padding -->
+  <!-- INPUT SECTION -->
   <div class="card bg-base-100 shadow-xl mb-6">
     <div class="card-body">
       <div class="form-control">
@@ -296,8 +346,8 @@
           placeholder="e.g. MAD/One Piece OR Immobilienkaufleute Band 1 2022 (or leave blank for root)"
           class="input input-bordered w-full bg-base-200 focus:input-primary"
         />
-        <label class="label pt-3">
-          <span class="label-text-alt text-base-content/70">
+                <label class="label pt-3">
+          <span class="label-text-alt text-base-content/70 whitespace-normal break-words">
             {#if isMangaMode(basePath)}
               🔵 <b>Manga Mode:</b> Files renamed to <code>page_001_de.jpg</code> inside <code>{basePath}/[FolderName]</code>
             {:else if basePath}
@@ -311,20 +361,33 @@
     </div>
   </div>
 
-  <!-- DROP ZONE -->
+  <!-- HIDDEN FILE INPUT -->
+  <input
+    type="file"
+    bind:this={fileInput}
+    on:change={handleFileInputChange}
+    multiple
+    webkitdirectory
+    class="hidden"
+    accept="*/*"
+  />
+
+  <!-- DROP ZONE WITH CLICK SUPPORT -->
   <div
     role="button"
     tabindex="0"
     on:drop={handleDrop}
     on:dragover={(e) => e.preventDefault()}
+    on:click={openFileBrowser}
+    on:keydown={(e) => e.key === 'Enter' && openFileBrowser()}
     class="border-4 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer text-base-content
            {isProcessing ? 'border-primary bg-primary/10 opacity-70 pointer-events-none' : 'border-base-300 bg-base-200 hover:border-primary hover:bg-base-300'}"
   >
     <h2 class="text-2xl font-semibold mb-2">
-      {isProcessing ? "Processing..." : "📂 Drag Files, Folders, CBZ, PDF, MP3..."}
+      {isProcessing ? "Processing..." : "📂 Drag or Click to Upload Files"}
     </h2>
     <p class="text-base-content/60">
-      {unrarReady ? "Ready to upload" : "Initializing unrar..."}
+      {unrarReady ? "Supports folders, CBZ, CBR, PDF, MP3, MP4, ZIP, and more" : "Initializing unrar..."}
     </p>
   </div>
 

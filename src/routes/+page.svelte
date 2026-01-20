@@ -31,17 +31,22 @@
       <div class="divider">Appearance</div>
 
       <div class="grid grid-cols-1 gap-4 items-center justify-items-center">
-        <!-- Theme Selector -->
-        <div class="form-control w-full max-w-xs">
-          <label class="label"><span class="label-text">{$t("theme")}</span></label>
-          <!-- 'data-choose-theme' is key here -->
-          <select class="select select-bordered w-full" data-choose-theme>
-            <option disabled selected>Select Theme</option>
-            {#each themes as th}
-              <option value={th}>{th}</option>
-            {/each}
-          </select>
-        </div>
+              <!-- Theme Selector: Added cursor-pointer for better UX -->
+      <div class="form-control w-full max-w-xs">
+        <label class="label">
+          <span class="label-text">{$t("theme")}</span>
+        </label>
+        
+        <!-- data-choose-theme is key here -->
+        <!-- Added cursor-pointer -->
+        <select class="select select-bordered w-full cursor-pointer" data-choose-theme>
+          <option disabled selected>{$t("theme")}</option>
+          {#each themes as theme}
+            <option value={theme}>{theme}</option>
+          {/each}
+        </select>
+      </div>
+
 
         <!-- Language Selector -->
         <div class="form-control w-full max-w-xs">

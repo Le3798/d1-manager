@@ -19,6 +19,8 @@
   let uploadQueue: QueueItem[] = [];
   let isProcessing = false;
   let fileInput: HTMLInputElement; // Reference to hidden file input
+  let uploadMode: 'files' | 'folder' = 'files'; // Default to files
+  let folderInput: HTMLInputElement;
 
   // --- THEMES LIST ---
   const themes = [
@@ -313,7 +315,11 @@
 
   // --- CLICK TO BROWSE (NEW) ---
   function openFileBrowser() {
-    fileInput.click();
+      if (uploadMode === 'folder') {
+    folderInput.click();
+    } else {
+      fileInput.click();
+    }
   }
 </script>
 
@@ -361,18 +367,40 @@
     </div>
   </div>
 
-  <!-- HIDDEN FILE INPUT -->
+    <!-- TOGGLE SWITCH -->
+  <div class="flex justify-center mb-4">
+    <div class="join">
+      <button 
+        class="join-item btn btn-sm {uploadMode === 'files' ? 'btn-primary' : 'btn-ghost'}"
+        on:click={() => uploadMode = 'files'}>
+        📄 Files
+      </button>
+      <button 
+        class="join-item btn btn-sm {uploadMode === 'folder' ? 'btn-primary' : 'btn-ghost'}"
+        on:click={() => uploadMode = 'folder'}>
+        📂 Folder
+      </button>
+    </div>
+  </div>
+
+  <!-- HIDDEN INPUTS -->
   <input
     type="file"
     bind:this={fileInput}
     on:change={handleFileInputChange}
     multiple
-    webkitdirectory
     class="hidden"
-    accept="*/*"
+  />
+  <input
+    type="file"
+    bind:this={folderInput}
+    on:change={handleFileInputChange}
+    webkitdirectory
+    mozdirectory
+    class="hidden"
   />
 
-  <!-- DROP ZONE WITH CLICK SUPPORT -->
+  <!-- DROP ZONE -->
   <div
     role="button"
     tabindex="0"
@@ -380,15 +408,19 @@
     on:dragover={(e) => e.preventDefault()}
     on:click={openFileBrowser}
     on:keydown={(e) => e.key === 'Enter' && openFileBrowser()}
-    class="border-4 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer text-base-content
+    class="border-4 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer text-base-content relative
            {isProcessing ? 'border-primary bg-primary/10 opacity-70 pointer-events-none' : 'border-base-300 bg-base-200 hover:border-primary hover:bg-base-300'}"
   >
     <h2 class="text-2xl font-semibold mb-2">
-      {isProcessing ? "Processing..." : "📂 Drag or Click to Upload Files"}
+      {isProcessing ? "Processing..." : `📂 Drag or Click to Upload ${uploadMode === 'folder' ? 'Folder' : 'Files'}`}
     </h2>
-    <p class="text-base-content/60">
-      {unrarReady ? "Supports folders, CBZ, CBR, PDF, MP3, MP4, ZIP, and more" : "Initializing unrar..."}
+    <p class="text-base-content/60 mb-2">
+      {unrarReady ? "Supports CBZ, PDF, MP3, ZIP, & more" : "Initializing unrar..."}
     </p>
+    
+    <span class="badge badge-ghost text-xs">
+      Mode: {uploadMode === 'folder' ? 'Folder Upload' : 'Multi-File Upload'}
+    </span>
   </div>
 
   <!-- UPLOAD QUEUE -->

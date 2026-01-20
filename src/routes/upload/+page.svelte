@@ -68,10 +68,10 @@
   // --- MAIN DROP HANDLER ---
   async function handleDrop(event: DragEvent) {
     event.preventDefault();
-    if (!basePath || basePath.trim() === "") {
-      return alert("⚠️ Please type the Series Base Path first!\nExample: MAD/One Piece (Manga) OR Books/History (Books)");
-    }
-    const cleanBasePath = basePath.replace(/\/$/, "");
+    
+    // FIXED: Allow blank basePath for root-level uploads
+    const cleanBasePath = basePath.trim().replace(/\/$/, "");
+    
     const items = event.dataTransfer?.items;
     if (!items || items.length === 0) return alert("Please upload files/folders.");
 
@@ -81,7 +81,6 @@
       if (entry) entries.push(entry);
     }
     
-    // Sort: Folders first, then files (alphabetical)
     entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
 
     const newItems: QueueItem[] = entries.map((entry) => ({
@@ -129,23 +128,20 @@
   // --- DIRECTORY PROCESSING ---
   async function processDirectoryEntry(entry: FileSystemDirectoryEntry, basePath: string, qIdx: number) {
     const isManga = isMangaMode(basePath);
-    // Manga Mode: Target is basePath/FolderName (e.g., MAD/One Piece/Band 01)
-    // Book Mode: Target is basePath (e.g. Books/SciFi) - we keep folder structure inside readAllDirectoryEntries if needed, 
-    // OR simply: Book Mode usually implies dragging a folder "Chapter 1" to "Books/Title". 
-    // Let's assume standard behavior: Upload folder content INTO basePath/FolderName.
     
-    const targetPath = `${basePath}/${entry.name}`;
+    // FIXED: Upload directly into basePath WITHOUT creating duplicate folder
+    // If basePath is empty, use just the folder name
+    const targetPath = basePath ? basePath : entry.name;
+    
     const files = await readAllDirectoryEntries(entry);
     
     let validFiles: FileSystemFileEntry[];
 
     if (isManga) {
-        // MANGA FILTER: Only images, ignore dots
         validFiles = files
             .filter((f) => !f.name.startsWith(".") && IMAGE_EXT_RE.test(f.name))
             .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
     } else {
-        // BOOK FILTER: Everything except hidden system files
         validFiles = files
             .filter((f) => !f.name.startsWith("."))
             .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
@@ -160,15 +156,9 @@
       
       let finalName: string;
       if (isManga) {
-          // RENAME logic for Manga
           const ext = (file.name.split(".").pop() || "").toLowerCase() || "jpg";
           finalName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
       } else {
-          // KEEP ORIGINAL NAME for Books
-          // If the file was deep inside the dragged folder, fileEntry.fullPath might be helpful, 
-          // but readAllDirectoryEntries flattens unless we change it. 
-          // For now, let's keep it simple: Upload flatly into the folder, OR preserve relative path if possible.
-          // Since readAllDirectoryEntries flattens, we use file.name. 
           finalName = file.name;
       }
 
@@ -182,7 +172,6 @@
     const isManga = isMangaMode(basePath);
     const name = file.name.toLowerCase();
 
-    // 1. MANGA MODE: CBZ/CBR Handling
     if (isManga) {
         const folderName = file.name.replace(/\.[^/.]+$/, ""); 
         const targetPath = `${basePath}/${folderName}`;
@@ -195,21 +184,17 @@
             await processCBR(file, targetPath, qIdx);
             return;
         }
-        // If it's a loose image file in Manga mode, maybe upload it directly?
-        // Let's allow loose images to go into a folder named after the file? Or just reject?
-        // Current logic rejected non-archives. Let's keep it strict or allow single image upload.
-        // Assuming strict for now as per original code, unless it's a folder.
         throw new Error("Manga Mode: Only Folders, .cbz, or .cbr allowed.");
     } 
 
-    // 2. BOOK MODE: Upload Anything
-    // Target: Directly into basePath (e.g. Books/History/book.pdf)
+    // BOOK MODE: Upload single file
+    const targetPath = basePath || ""; // If basePath is empty, upload to root
     updateItem(qIdx, { status: 'uploading', total: 1, message: 'Uploading single file...' });
-    await uploadFile(file.name, file, basePath);
+    await uploadFile(file.name, file, targetPath);
     updateItem(qIdx, { progress: 1, message: 'Uploaded' });
   }
 
-  // --- CBZ/CBR HANDLERS (Unchanged, only used in Manga Mode) ---
+  // --- CBZ/CBR HANDLERS ---
   async function processCBZ(file: File, targetPath: string, qIdx: number) {
     updateItem(qIdx, { message: 'Reading Zip...' });
     const zip = new JSZip();
@@ -270,7 +255,6 @@
     if (!res.ok) throw new Error("Upload failed");
   }
 
-  // --- RECURSIVE DIRECTORY READER ---
   async function readAllDirectoryEntries(directoryReader: FileSystemDirectoryEntry) {
     const reader = directoryReader.createReader();
     let entries: FileSystemEntry[] = [];
@@ -285,10 +269,11 @@
 
 <div class="container mx-auto p-4 max-w-4xl font-sans text-base-content pb-20">
   
-  <!-- HEADER -->
-  <div class="flex justify-between items-center mb-6">
-    <h1 class="text-3xl font-bold text-center flex-1">Universal Upload Tool</h1>
-    <div class="form-control">
+  <!-- HEADER: FIXED - Title centered properly -->
+  <div class="flex items-center mb-6 gap-4">
+    <div class="flex-1"></div>
+    <h1 class="text-3xl font-bold text-center">Universal Upload Tool</h1>
+    <div class="flex-1 flex justify-end">
       <select class="select select-bordered select-sm w-full max-w-xs" data-choose-theme>
         <option disabled selected>Theme</option>
         {#each themes as th}
@@ -298,27 +283,27 @@
     </div>
   </div>
 
-  <!-- INPUT SECTION -->
+  <!-- INPUT SECTION: FIXED - Added padding -->
   <div class="card bg-base-100 shadow-xl mb-6">
     <div class="card-body">
       <div class="form-control">
-        <label class="label">
+        <label class="label pb-3">
           <span class="label-text font-bold text-lg">Series Base Path / Target Folder</span>
         </label>
         <input
           type="text"
           bind:value={basePath}
-          placeholder="e.g. MAD/One Piece OR Books/History"
+          placeholder="e.g. MAD/One Piece OR Immobilienkaufleute Band 1 2022 (or leave blank for root)"
           class="input input-bordered w-full bg-base-200 focus:input-primary"
         />
-        <label class="label">
+        <label class="label pt-3">
           <span class="label-text-alt text-base-content/70">
             {#if isMangaMode(basePath)}
               🔵 <b>Manga Mode:</b> Files renamed to <code>page_001_de.jpg</code> inside <code>{basePath}/[FolderName]</code>
             {:else if basePath}
-              🟢 <b>Book Mode:</b> Files keep original names inside <code>{basePath}/[FolderName or File]</code>
+              🟢 <b>Book Mode:</b> Files uploaded directly to <code>{basePath}/</code> with original names
             {:else}
-              Enter a path to see the upload mode.
+              💡 Enter a path to see the upload mode, or leave blank to upload to root folder.
             {/if}
           </span>
         </label>

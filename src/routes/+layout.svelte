@@ -67,7 +67,7 @@
 <style>
   /* Optional: Active link styling if DaisyUI isn't catching it perfectly */
   .menu .active {
-    background-color: var(--p, #570df8); /* Primary color */
-    color: white;
+    background-color: hsl(var(--p)) !important;
+    color: hsl(var(--pc)) !important;
   }
 </style>

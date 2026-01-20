@@ -1,9 +1,8 @@
-import { goto } from "$app/navigation";
-
 <script lang="ts">
   import "../app.css"; // Ensure global styles are loaded
   import { t } from "svelte-i18n";
   import { page } from "$app/stores";
+  import { goto } from "$app/navigation";
   
   export let data; // Comes from layout.server.ts (contains dbms list)
 

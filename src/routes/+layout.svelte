@@ -1,3 +1,5 @@
+import { goto } from "$app/navigation";
+
 <script lang="ts">
   import "../app.css"; // Ensure global styles are loaded
   import { t } from "svelte-i18n";
@@ -9,7 +11,7 @@
   function handleDbChange(event) {
     const db = event.target.value;
     if (db) {
-      window.location.href = `/db/${db}`;
+      goto(`/db/${db}`);
     }
   }
 </script>

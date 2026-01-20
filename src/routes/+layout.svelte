@@ -1,73 +1,72 @@
 <script lang="ts">
-	import { browser } from "$app/environment";
-	import { goto } from "$app/navigation";
-	import { page } from "$app/stores";
-	import { get } from "$lib/storage";
-	import { onMount } from "svelte";
-	import { locale, t } from "svelte-i18n";
-	import { writable } from "svelte/store";
-	import { themeChange } from "theme-change";
-	import "../app.css";
-	import type { LayoutData } from "./$types";
-	import { preloadData } from "$app/navigation";
+  import "../app.css"; // Ensure global styles are loaded
+  import { t } from "svelte-i18n";
+  import { page } from "$app/stores";
+  
+  export let data; // Comes from layout.server.ts (contains dbms list)
 
-	export let data: LayoutData;
-	let database = $page.params.database || "";
-	$: {
-		if (browser && database && database !== $page.params.database) {
-			goto(`/db/${database}`);
-		}
-	}
-
-	let lang = writable<string | null | undefined>(undefined);
-
-	onMount(() => {
-		themeChange(false);
-		lang = get("lang", {
-			default_value: window.navigator.language,
-			ttl: 30 * 24 * 60 * 60 * 1000,
-		});
-		lang.subscribe((value) => {
-			if (value) {
-				locale.set(value);
-			}
-		});
-	});
-
-	function preload() {
-		if (database) {
-			if (data.dbms.length > 1) {
-				preloadData(`/db/${database === data.dbms[0] ? data.dbms[1] : data.dbms[0]}`);
-			}
-		} else if (data.dbms[0]) {
-			preloadData(`/db/${data.dbms[0]}`);
-		}
-	}
+  // Function to handle database selection change
+  function handleDbChange(event) {
+    const db = event.target.value;
+    if (db) {
+      window.location.href = `/db/${db}`;
+    }
+  }
 </script>
 
-<div class="flex h-full w-full flex-col">
-	<div class="navbar bg-base-200 min-h-12">
-		<div class="flex-1">
-			<a
-				class="btn-ghost btn-sm btn text-xl normal-case"
-				href="/"
-				on:click={() => (database = "")}>D1 Manager</a
-			>
-		</div>
-		<div class="flex-none">
-			<select
-				class="select-border select select-sm w-full max-w-xs"
-				bind:value={database}
-				on:click={preload}
-			>
-				<option value="" disabled selected>{$t("select-database")}</option>
-				{#each data.dbms as db}
-					<option value={db}>{db}</option>
-				{/each}
-			</select>
-		</div>
-	</div>
-	<div class="w-full flex-1 overflow-y-auto">
-		<slot />
-	</div>
+<div class="min-h-screen bg-base-200 flex flex-col font-sans text-base-content">
+  <!-- NAVBAR -->
+  <div class="navbar bg-base-100 shadow-md px-4">
+    <div class="navbar-start">
+      <div class="dropdown">
+        <label tabindex="0" class="btn btn-ghost lg:hidden">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h8m-8 6h16" /></svg>
+        </label>
+        <ul tabindex="0" class="menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow bg-base-100 rounded-box w-52">
+           <li><a href="/" class:active={$page.url.pathname === '/'}>Home</a></li>
+           <li><a href="/upload" class:active={$page.url.pathname.startsWith('/upload')}>Upload</a></li>
+           <li><a href="/ocr" class:active={$page.url.pathname.startsWith('/ocr')}>OCR</a></li>
+        </ul>
+      </div>
+      <a href="/" class="btn btn-ghost normal-case text-xl">D1 Manager</a>
+    </div>
+
+    <div class="navbar-center hidden lg:flex">
+      <ul class="menu menu-horizontal px-1 gap-2">
+        <li><a href="/" class:active={$page.url.pathname === '/'}>Home</a></li>
+        <li><a href="/upload" class:active={$page.url.pathname.startsWith('/upload')}>Upload Tool</a></li>
+        <li><a href="/ocr" class:active={$page.url.pathname.startsWith('/ocr')}>OCR Tool</a></li>
+      </ul>
+    </div>
+
+    <div class="navbar-end gap-2">
+      <!-- DATABASE SELECTOR (Existing Feature) -->
+      <select class="select select-bordered select-sm max-w-xs" on:change={handleDbChange}>
+        <option disabled selected>{$t("select-database")}</option>
+        {#each data.dbms as db}
+          <option value={db}>{db}</option>
+        {/each}
+      </select>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <main class="flex-grow p-4 container mx-auto">
+    <slot />
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="footer p-4 bg-neutral text-neutral-content mt-auto">
+    <div class="items-center grid-flow-col">
+      <p>Custom D1 Manager © {new Date().getFullYear()}</p>
+    </div>
+  </footer>
 </div>
+
+<style>
+  /* Optional: Active link styling if DaisyUI isn't catching it perfectly */
+  .menu .active {
+    background-color: var(--p, #570df8); /* Primary color */
+    color: white;
+  }
+</style>

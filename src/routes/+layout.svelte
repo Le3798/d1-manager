@@ -67,7 +67,7 @@
 <style>
   /* Optional: Active link styling if DaisyUI isn't catching it perfectly */
   .menu .active {
-    background-color: hsl(var(--p)) !important;
-    color: hsl(var(--pc)) !important;
+    background-color: oklch(var(--p)) !important;
+    color: oklch(var(--pc)) !important;
   }
 </style>

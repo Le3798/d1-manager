@@ -1,16 +1,20 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
-@plugin "daisyui";
+
+/* Enable ALL themes here */
+@plugin "daisyui" {
+  themes: light, dark, cupcake, bumblebee, emerald, corporate, synthwave, retro, cyberpunk, valentine, halloween, garden, forest, aqua, lofi, pastel, fantasy, wireframe, black, luxury, dracula, cmyk, autumn, business, acid, lemonade, night, coffee, winter, dim, nord, sunset;
+}
 
 * {
-	@apply relative font-sans;
+    @apply relative font-sans;
 }
 
 *::-webkit-scrollbar {
-	@apply hidden;
+    @apply hidden;
 }
 
 html,
 body {
-	@apply absolute m-0 h-full w-full overflow-hidden p-0 transition-colors;
+    @apply absolute m-0 h-full w-full overflow-hidden p-0 transition-colors;
 }

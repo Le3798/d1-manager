@@ -2,6 +2,7 @@
   import JSZip from "jszip";
   import { onMount } from "svelte";
   import { browser } from "$app/environment";
+  import { themeChange } from "theme-change"; // Import theme-change
 
   // --- TYPES ---
   interface QueueItem {
@@ -17,6 +18,15 @@
   let basePath = "";
   let uploadQueue: QueueItem[] = [];
   let isProcessing = false;
+
+  // --- THEMES LIST (Same as main page) ---
+  const themes = [
+    "light", "dark", "cupcake", "bumblebee", "emerald", "corporate",
+    "synthwave", "retro", "cyberpunk", "valentine", "halloween", "garden",
+    "forest", "aqua", "lofi", "pastel", "fantasy", "wireframe", "black",
+    "luxury", "dracula", "cmyk", "autumn", "business", "acid", "lemonade",
+    "night", "coffee", "winter", "dim", "nord", "sunset",
+  ];
 
   // --- UNRAR / WASM SETUP ---
   let unrarReady = false;
@@ -34,6 +44,10 @@
 
   onMount(async () => {
     if (!browser) return;
+    
+    // Initialize Theme Changer
+    themeChange(false);
+
     try {
       const unrar = await import("node-unrar-js");
       createExtractorFromData = unrar.createExtractorFromData;
@@ -212,8 +226,20 @@
   }
 </script>
 
-<div class="container mx-auto p-4 max-w-4xl font-sans text-base-content">
-  <h1 class="text-3xl font-bold mb-6 text-center">Series Upload Tool</h1>
+<div class="container mx-auto p-4 max-w-4xl font-sans text-base-content pb-20"> <!-- Added pb-20 for safe scroll space -->
+  
+  <!-- HEADER: Title + Theme Selector -->
+  <div class="flex justify-between items-center mb-6">
+    <h1 class="text-3xl font-bold text-center flex-1">Series Upload Tool</h1>
+    <div class="form-control">
+      <select class="select select-bordered select-sm w-full max-w-xs" data-choose-theme>
+        <option disabled selected>Theme</option>
+        {#each themes as th}
+          <option value={th}>{th}</option>
+        {/each}
+      </select>
+    </div>
+  </div>
 
   <!-- INPUT SECTION: Uses DaisyUI Card + Inputs -->
   <div class="card bg-base-100 shadow-xl mb-6">
@@ -243,8 +269,8 @@
     tabindex="0"
     on:drop={handleDrop}
     on:dragover={(e) => e.preventDefault()}
-    class="border-4 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer
-           {isProcessing ? 'border-primary bg-primary/10 opacity-70 pointer-events-none' : 'border-base-300 bg-base-100 hover:border-primary hover:bg-base-200'}"
+    class="border-4 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer text-base-content
+           {isProcessing ? 'border-primary bg-primary/10 opacity-70 pointer-events-none' : 'border-base-300 bg-base-200 hover:border-primary hover:bg-base-300'}"
   >
     <h2 class="text-2xl font-semibold mb-2">
       {isProcessing ? "Processing..." : "📂 Drag Band Folders or Archives Here"}
@@ -254,13 +280,14 @@
     </p>
   </div>
 
-  <!-- VIEWPORT: Uses DaisyUI colors -->
+  <!-- VIEWPORT: Fixed Height + Scroll -->
   {#if uploadQueue.length > 0}
-    <div class="card bg-base-100 shadow-xl mt-6 overflow-hidden">
+    <div class="card bg-base-100 shadow-xl mt-6 overflow-hidden border border-base-200">
       <div class="card-header p-4 bg-base-200 font-bold border-b border-base-300">
         Upload Queue
       </div>
-      <div class="max-h-96 overflow-y-auto p-0">
+      <!-- ADDED: max-h-[50vh] and overflow-y-auto ensure scrolling works properly -->
+      <div class="max-h-[50vh] overflow-y-auto p-0 scrollbar-thin">
         {#each uploadQueue as job (job.id)}
           <div class="p-4 border-b border-base-200 last:border-none hover:bg-base-200/50 transition-colors">
             

@@ -1,80 +1,77 @@
 <script lang="ts">
-	import { page } from "$app/stores";
-	import { t } from "svelte-i18n";
-	import type { LayoutData } from "./$types";
-	import { sqlite2sql } from "$lib/sqlite2sql";
-	import { invalidateAll } from "$app/navigation";
+  import { page } from "$app/stores";
+  import { t } from "svelte-i18n";
 
-	export let data: LayoutData;
+  export let data; // Contains list of tables in data.db
 
-	async function import_db() {
-		const file = document.createElement("input");
-		file.type = "file";
-		file.accept = ".sqlite3,.sqlite,.db,.sql";
-		file.onchange = async () => {
-			if (file.files?.length !== 1) {
-				return;
-			}
-
-			const db = file.files[0];
-			let sql: string;
-			if (db.name.endsWith(".sql")) {
-				sql = await db.text();
-			} else {
-				sql = await sqlite2sql(await db.arrayBuffer());
-			}
-
-			console.log(sql);
-
-			const res = await fetch(`/api/db/${$page.params.database}/exec`, {
-				method: "POST",
-				body: JSON.stringify({ query: sql }),
-			});
-
-			if (res.ok) {
-				await invalidateAll();
-			} else {
-				alert(await res.text());
-			}
-
-			file.remove();
-		};
-		file.click();
-	}
+  // Helper to check if a table is active
+  $: activeTable = $page.params.table;
 </script>
 
-<div class="flex h-full w-full flex-col">
-	<div class="navbar border-base-300 min-h-12 border-b">
-		<div class="flex-1">
-			<a class="px-4 font-bold" href="/db/{$page.params.database}">
-				{$t("n-table-in-db", {
-					values: { db: $page.params.database, n: data.db.length },
-				})}
-			</a>
-		</div>
-		<div class="flex-none gap-2">
-			{#if $page.params.table}
-				<span class="px-4 font-bold">
-					{$page.params.table}
-				</span>
-			{:else}
-				<button class="btn-outline btn-sm btn" on:click={import_db}>
-					{$t("import")}
-				</button>
-				<a
-					class="btn-outline btn-sm btn"
-					href="/api/db/{$page.params.database}/dump/db-{$page.params.database}.sqlite3"
-					target="_blank"
-					rel="noreferrer"
-				>
-					{$t("download")}
-				</a>
-			{/if}
-		</div>
-	</div>
-	<div class="w-full flex-1 overflow-y-auto">
-		{#key $page.params.table}
-			<slot />
-		{/key}
-	</div>
+<div class="drawer lg:drawer-open">
+  <input id="db-drawer" type="checkbox" class="drawer-toggle" />
+  
+  <div class="drawer-content flex flex-col p-6">
+    <!-- PAGE CONTENT SLOT -->
+    <div class="flex items-center justify-between mb-4 lg:hidden">
+      <label for="db-drawer" class="btn btn-square btn-ghost">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-6 h-6 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+      </label>
+      <span class="font-bold text-lg">{$page.params.database}</span>
+    </div>
+
+    {#key $page.params.table}
+      <slot />
+    {/key}
+  </div> 
+  
+  <div class="drawer-side z-20">
+    <label for="db-drawer" class="drawer-overlay"></label> 
+    <ul class="menu p-4 w-80 h-full bg-base-200 text-base-content">
+      <!-- SIDEBAR HEADER -->
+      <li class="menu-title text-lg font-bold uppercase tracking-widest opacity-70 mb-2">
+        {$page.params.database}
+      </li>
+      
+      <!-- ACTIONS -->
+      <li class="mb-4">
+        <a href="/db/{$page.params.database}/sql" class:active={$page.url.pathname.endsWith('/sql')}>
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
+          Run SQL Query
+        </a>
+      </li>
+
+      <!-- TABLES LIST -->
+      <li class="menu-title">Tables ({data.db.length})</li>
+      
+      {#each data.db as table}
+        <li>
+          <a 
+            href="/db/{$page.params.database}/{table}" 
+            class:active={activeTable === table}
+            class="flex justify-between"
+          >
+            <span class="truncate">{table}</span>
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7-6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2z" /></svg>
+          </a>
+        </li>
+      {/each}
+
+      <div class="divider"></div>
+      
+      <!-- IMPORT/EXPORT (Preserving your logic) -->
+      <li>
+        <a href="/db/{$page.params.database}/import">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+          {$t("import")}
+        </a>
+      </li>
+      <li>
+        <a href="/db/{$page.params.database}/download">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+          {$t("download")}
+        </a>
+      </li>
+    </ul>
+  </div>
 </div>

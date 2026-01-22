@@ -305,29 +305,56 @@
 
   async function processCBR(jobId: string, file: File, targetPath: string) {
     updateItem(jobId, { message: 'Unrar...' });
-    const ab = await file.arrayBuffer();
-    const extractor = await createExtractorFromData!({ data: ab, wasmBinary });
-    const list = extractor.getFileList().fileHeaders.filter((h: any) => !h.flags.directory && IMAGE_EXT_RE.test(h.name));
     
-    updateItem(jobId, { total: list.length, message: 'Uploading...' });
-    
-    // Sort
-    list.sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    try {
+        const ab = await file.arrayBuffer();
+        // Create extractor
+        const extractor = await createExtractorFromData!({ data: ab, wasmBinary });
+        
+        // --- FIX STARTS HERE ---
+        // 1. Get the list object
+        const listObj = extractor.getFileList();
+        
+        // 2. Convert the Generator to an Array using spread syntax [... ]
+        const allHeaders = [...listObj.fileHeaders]; 
+        
+        // 3. Now we can safely filter
+        const list = allHeaders.filter((h: any) => 
+            !h.flags.directory && IMAGE_EXT_RE.test(h.name)
+        );
+        // --- FIX ENDS HERE ---
 
-    for (let i = 0; i < list.length; i++) {
-        const h = list[i];
-        const extracted = extractor.extract({ files: [h.name] });
-        const [arc] = [...extracted.files];
-        if (arc.extraction) {
-             const ext = h.name.split('.').pop() || 'jpg';
-             const blob = new Blob([arc.extraction], { type: mimeByExt[ext] || 'image/jpeg' });
-             const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
-             
-             updateItem(jobId, { progress: i + 1, message: `Uploading ${i+1}/${list.length}` });
-             await uploadFile(newName, blob, targetPath);
+        if (list.length === 0) {
+            throw new Error("No valid images found in CBR");
         }
+
+        updateItem(jobId, { total: list.length, message: 'Uploading...' });
+
+        // Sort
+        list.sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+        for (let i = 0; i < list.length; i++) {
+            const h = list[i];
+            const extracted = extractor.extract({ files: [h.name] });
+            // Extract returns an iterator too, convert to array
+            const [arc] = [...extracted.files]; 
+            
+            if (arc && arc.extraction) {
+                const ext = h.name.split('.').pop() || 'jpg';
+                // Correctly handle the Uint8Array extraction
+                const blob = new Blob([arc.extraction], { type: mimeByExt[ext] || 'image/jpeg' });
+                const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
+                
+                updateItem(jobId, { progress: i + 1, message: `Uploading ${i+1}/${list.length}` });
+                await uploadFile(newName, blob, targetPath);
+            }
+        }
+        updateItem(jobId, { status: 'done', message: 'Completed' });
+
+    } catch (err: any) {
+        console.error("CBR Error:", err);
+        updateItem(jobId, { status: 'error', message: "Failed: " + (err.message || "Invalid CBR") });
     }
-    updateItem(jobId, { status: 'done', message: 'Completed' });
   }
 
   // --- HELPERS ---

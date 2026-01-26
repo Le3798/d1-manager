@@ -16,7 +16,7 @@ const detectedDBs = DBMS(env);
 // 2. Manually inject your new DB to guarantee it shows up
 // The key "Manga DB" is what will appear in your dropdown menu.
 if (env.Manga) {
-    detectedDBs["Manga DB"] = env.Manga;
+    detectedDBs["Manga Library"] = env.Manga;
 }
 
 // 3. Assign to locals

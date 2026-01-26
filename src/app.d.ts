@@ -13,9 +13,9 @@ declare global {
                 OPENAI_API_KEY?: string;
                 AI?: unknown;
                 
-                // Add your databases here so TS knows they are D1Databases
+                DB: D1Database;
                 Manga: D1Database;
-                // (Add your other library DB name here too if you want)
+                
                 
             } & Record<string, D1Database | Fetcher | string>; // Updated to include D1Database
         }

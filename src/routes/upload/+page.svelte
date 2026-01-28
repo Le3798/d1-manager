@@ -1,16 +1,24 @@
 <script lang="ts">
   import JSZip from "jszip";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte"; // Added onDestroy for safety
   import { browser } from "$app/environment";
   import { themeChange } from "theme-change";
 
-  // --- PORTAL ACTION ---
+  // --- SAFE PORTAL ACTION ---
+  // Fixes the "Blank Screen" crash by handling unmounts carefully
   function portal(node: HTMLElement) {
     if (!browser) return;
+    
+    // Move node to body
     document.body.appendChild(node);
+    
     return {
       destroy() {
-        if (node.parentNode) node.parentNode.removeChild(node);
+        // Only remove if it is still attached to document.body
+        // This prevents conflicts if Svelte has already detached it
+        if (node.parentNode === document.body) {
+            document.body.removeChild(node);
+        }
       }
     };
   }
@@ -40,11 +48,9 @@
   let isManageMode = false;
   let selectedJobIds = new Set<string>();
   
-  // --- REACTIVE HELPERS (UPDATED) ---
+  // --- REACTIVE HELPERS ---
   $: selectedCount = selectedJobIds.size;
   $: hasFinishedTasks = uploadQueue.some(item => item.status === 'done');
-  
-  // COUNT ONLY ACTIVE TASKS (Not 'done')
   $: activeQueueCount = uploadQueue.filter(item => item.status !== 'done').length;
 
   // --- DELETE MODAL STATE ---
@@ -137,18 +143,18 @@
 
   function promptDeleteBatch() {
     if (selectedCount === 0) return;
-    deleteModal.showModal();
+    if (deleteModal) deleteModal.showModal();
   }
 
   function confirmDelete() {
     uploadQueue = uploadQueue.filter(item => !selectedJobIds.has(item.id));
     selectedJobIds.clear();
     selectedJobIds = selectedJobIds;
-    deleteModal.close();
+    if (deleteModal) deleteModal.close();
   }
 
   function cancelDelete() {
-    deleteModal.close();
+    if (deleteModal) deleteModal.close();
   }
 
   function isJobAlive(id: string): boolean {

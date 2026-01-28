@@ -5,19 +5,20 @@
   import { themeChange } from "theme-change";
 
   // --- SAFE PORTAL ACTION ---
-  // Fixes the "Blank Screen" crash by handling unmounts carefully
+  // Fixes the "Blank Screen" crash by ensuring safe detachment
   function portal(node: HTMLElement) {
     if (!browser) return;
     
-    // Move node to body
+    // Move node to body to escape parent stacking contexts (z-index)
     document.body.appendChild(node);
     
     return {
       destroy() {
-        // Only remove if it is still attached to document.body
-        // This prevents conflicts if Svelte has already detached it
-        if (node.parentNode === document.body) {
-            document.body.removeChild(node);
+        // Use the native remove() method which safely handles the node 
+        // regardless of its current parent (body or otherwise).
+        // This prevents the "NotFoundError" crash in Svelte's runtime.
+        if (node && node.parentNode) {
+            node.parentNode.removeChild(node);
         }
       }
     };

@@ -510,7 +510,7 @@
             <span>Upload Queue ({activeQueueCount})</span>
 
             {#if isManageMode && hasFinishedTasks}
-              <div class="tooltip tooltip-left" data-tip="Clear all finished tasks">
+              <div class="tooltip tooltip-top" data-tip="Clear all finished tasks">
                 <button 
                   class="btn btn-xs btn-ghost gap-1 text-base-content/70 hover:text-primary transition-colors"
                   on:click={clearFinishedTasks}

@@ -24,14 +24,11 @@
   let fileInput: HTMLInputElement; 
   let folderInput: HTMLInputElement;
   let uploadMode: 'files' | 'folder' = 'files';
-
   // Delete Modal State
   let deleteModal: HTMLDialogElement;
   let jobToDeleteId: string | null = null;
-
   // --- QUEUE MANAGEMENT ---
   let executionQueue = Promise.resolve();
-
   function addToQueue(task: () => Promise<void>) {
     executionQueue = executionQueue.then(() => task()).catch(err => {
         console.error("Queue processing error:", err);
@@ -46,7 +43,6 @@
     "luxury", "dracula", "cmyk", "autumn", "business", "acid", "lemonade",
     "night", "coffee", "winter", "dim", "nord", "sunset",
   ];
-
   // --- UNRAR / WASM ---
   let unrarReady = false;
   let wasmBinary: ArrayBuffer | null = null;
@@ -56,7 +52,6 @@
   const mimeByExt: Record<string, string> = {
     jpg: "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"
   };
-
   onMount(async () => {
     if (!browser) return;
     themeChange(false);
@@ -69,17 +64,18 @@
       wasmBinary = await res.arrayBuffer();
       unrarReady = true;
     } catch (e) {
+    
       console.error("Unrar loading failed:", e);
     }
   });
-
   function isMangaMode(path: string): boolean {
     return path.startsWith("MAD/");
   }
 
   // --- CLICK HANDLER ---
   function openFileBrowser() {
-    uploadMode === 'folder' ? folderInput.click() : fileInput.click();
+    uploadMode === 'folder' ?
+    folderInput.click() : fileInput.click();
   }
 
   // --- DELETE HANDLERS ---
@@ -113,7 +109,6 @@
     
     const files = Array.from(input.files);
     const isFolderUpload = input.webkitdirectory;
-
     if (isFolderUpload) {
         // GROUP BY FOLDER
         const folders = new Map<string, File[]>();
@@ -123,7 +118,6 @@
             if (!folders.has(rootFolder)) folders.set(rootFolder, []);
             folders.get(rootFolder)!.push(f);
         });
-
         const newItems: QueueItem[] = Array.from(folders.keys()).map(folderName => ({
             id: crypto.randomUUID(),
             name: folderName,
@@ -132,18 +126,17 @@
             progress: 0,
             total: folders.get(folderName)!.length,
             message: 'Waiting...'
+   
         }));
         
         const startIndex = uploadQueue.length;
         uploadQueue = [...uploadQueue, ...newItems];
-
         // Queue folders
         Array.from(folders.keys()).forEach((folderName, i) => {
             const jobId = uploadQueue[startIndex + i].id;
             const folderFiles = folders.get(folderName)!;
             addToQueue(() => processBatch(jobId, folderFiles, basePath));
         });
-
     } else {
         // FILES
         const newItems: QueueItem[] = files.map(f => ({
@@ -152,6 +145,7 @@
             type: 'file',
             status: 'pending',
             progress: 0,
+          
             total: 1,
             message: 'Waiting...'
         }));
@@ -201,12 +195,14 @@
              if (!isJobAlive(jobId)) return;
 
              if (entry.isDirectory) {
-                await processDirectoryEntry(jobId, entry as FileSystemDirectoryEntry, basePath);
+   
+               await processDirectoryEntry(jobId, entry as FileSystemDirectoryEntry, basePath);
             } else {
                 const file = await new Promise<File>((resolve, reject) => {
                     (entry as FileSystemFileEntry).file(resolve, reject);
                 });
-                await processSingleFile(jobId, file, basePath);
+     
+               await processSingleFile(jobId, file, basePath);
             }
         });
     });
@@ -214,11 +210,13 @@
 
   // --- LOGIC: PROCESS BATCH ---
   async function processBatch(jobId: string, files: File[], basePath: string) {
-    if (!isJobAlive(jobId)) return; // Abort if deleted
+    if (!isJobAlive(jobId)) return;
+    // Abort if deleted
 
     updateItem(jobId, { status: 'uploading', total: files.length, message: 'Starting...' });
     for (let i = 0; i < files.length; i++) {
-        if (!isJobAlive(jobId)) return; // Stop loop if deleted
+        if (!isJobAlive(jobId)) return;
+        // Stop loop if deleted
 
         const f = files[i];
         updateItem(jobId, { progress: i + 1, message: `Uploading ${f.name}...` });
@@ -233,12 +231,14 @@
                  const folderName = parts.length > 1 ? parts.slice(0, -1).join('/') : "";
                  targetPath = `${basePath}/${folderName}`;
                  if (IMAGE_EXT_RE.test(f.name)) {
-                     const ext = (f.name.split(".").pop() || "").toLowerCase() || "jpg";
+                     const ext = (f.name.split(".").pop() || "").toLowerCase() ||
+                     "jpg";
                      finalName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
                  }
             } else {
                 // BOOK MODE
-                const fullPath = basePath ? `${basePath}/${relPath}` : relPath;
+                const fullPath = basePath ?
+                `${basePath}/${relPath}` : relPath;
                 const lastSlash = fullPath.lastIndexOf('/');
                 targetPath = lastSlash !== -1 ? fullPath.substring(0, lastSlash) : "";
                 finalName = f.name;
@@ -255,7 +255,6 @@
   // --- LOGIC: PROCESS SINGLE FILE ---
   async function processSingleFile(jobId: string, file: File, basePath: string) {
     if (!isJobAlive(jobId)) return;
-
     updateItem(jobId, { status: 'uploading', total: 1, message: 'Processing...' });
     try {
         const name = file.name.toLowerCase();
@@ -278,7 +277,6 @@
         
         await uploadFile(file.name, file, basePath);
         if (isJobAlive(jobId)) updateItem(jobId, { progress: 1, status: 'done', message: 'Done' });
-
     } catch (e: any) {
         if (isJobAlive(jobId)) updateItem(jobId, { status: 'error', message: e.message });
     }
@@ -312,16 +310,15 @@
     const files = Object.values(content.files).filter(e => !e.dir && IMAGE_EXT_RE.test(e.name));
     
     if (isJobAlive(jobId)) updateItem(jobId, { total: files.length, message: 'Uploading...' });
-    
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     for (let i = 0; i < files.length; i++) {
-        if (!isJobAlive(jobId)) return; // Stop if deleted
+        if (!isJobAlive(jobId)) return;
+        // Stop if deleted
 
         const entry = files[i];
         const blob = await entry.async("blob");
         const ext = entry.name.split('.').pop() || 'jpg';
         const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
-        
         updateItem(jobId, { progress: i + 1, message: `Uploading ${i+1}/${files.length}` });
         await uploadFile(newName, blob, targetPath);
     }
@@ -342,25 +339,22 @@
         const list = allHeaders.filter((h: any) => 
             !h.flags.directory && IMAGE_EXT_RE.test(h.name)
         );
-
         if (list.length === 0) throw new Error("No valid images found in CBR");
-
         if (isJobAlive(jobId)) updateItem(jobId, { total: list.length, message: 'Uploading...' });
         
         list.sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-        
         for (let i = 0; i < list.length; i++) {
-            if (!isJobAlive(jobId)) return; // Stop if deleted
+            if (!isJobAlive(jobId)) return;
+            // Stop if deleted
 
             const h = list[i];
             const extracted = extractor.extract({ files: [h.name] });
             const [arc] = [...extracted.files];
-            
             if (arc && arc.extraction) {
-                const ext = h.name.split('.').pop() || 'jpg';
+                const ext = h.name.split('.').pop() ||
+                'jpg';
                 const blob = new Blob([arc.extraction], { type: mimeByExt[ext] || 'image/jpeg' });
                 const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
-                
                 updateItem(jobId, { progress: i + 1, message: `Uploading ${i+1}/${list.length}` });
                 await uploadFile(newName, blob, targetPath);
             }
@@ -429,6 +423,7 @@
           bind:value={basePath}
           placeholder="e.g. MAD/One Piece OR Books/History (leave blank for root)"
           class="input input-bordered w-full bg-base-200 focus:input-primary"
+    
         />
         <label class="label pt-3">
           <span class="label-text-alt text-base-content/70 whitespace-normal break-words">
@@ -436,6 +431,7 @@
               <b>Manga Mode:</b> Files renamed to <code>page_001_de.jpg</code> inside <code>{basePath}/[FolderName]</code>
             {:else if basePath}
               <b>Book Mode:</b> Files uploaded directly to <code>{basePath}/</code> with original names
+ 
             {:else}
               Enter a path to see the upload mode, or leave blank to upload to root folder.
             {/if}
@@ -453,6 +449,7 @@
         Files
       </button>
       <button 
+   
         class="join-item btn btn-sm {uploadMode === 'folder' ? 'btn-primary' : 'btn-ghost'}"
         on:click={() => uploadMode = 'folder'}>
         Folder
@@ -470,8 +467,10 @@
     on:dragover={(e) => e.preventDefault()}
     on:click={openFileBrowser}
     on:keydown={(e) => e.key === 'Enter' && openFileBrowser()}
+   
     class="border-4 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer text-base-content relative
-           {isProcessing ? 'border-primary bg-primary/10 opacity-70 pointer-events-none' : 'border-base-300 bg-base-200 hover:border-primary hover:bg-base-300'}"
+           {isProcessing ?
+           'border-primary bg-primary/10 opacity-70 pointer-events-none' : 'border-base-300 bg-base-200 hover:border-primary hover:bg-base-300'}"
   >
     <h2 class="text-2xl font-semibold mb-2">
       {isProcessing ? "Processing..." : `Drag or Click to Upload ${uploadMode === 'folder' ? 'Folder' : 'Files'}`}
@@ -483,6 +482,7 @@
     <span class="badge badge-ghost text-xs">
       Mode: {uploadMode === 'folder' ? 'Folder Upload' : 'Multi-File Upload'}
     </span>
+ 
   </div>
 
   {#if uploadQueue.length > 0}
@@ -494,21 +494,26 @@
         {#each uploadQueue as job (job.id)}
           <div class="p-4 border-b border-base-200 last:border-none hover:bg-base-200/50 transition-colors flex items-center gap-4">
             
+   
             <div class="flex-1 min-w-0">
                 <div class="flex justify-between mb-2">
                     <span class="font-medium truncate pr-4">{job.name}</span>
                     <span class="text-sm opacity-70" class:text-error={job.status==='error'} class:text-success={job.status==='done'}>{job.message}</span>
                 </div>
+       
                 <div class="w-full bg-base-300 rounded-full h-2.5 mb-2">
                     <div class="h-2.5 rounded-full transition-all duration-300" 
                     class:bg-primary={job.status !== 'error' && job.status !== 'done'}
                     class:bg-success={job.status === 'done'}
+             
                     class:bg-error={job.status === 'error'}
-                    style="width: {job.total ? (job.progress / job.total) * 100 : 0}%"
+                    style="width: {job.total ?
+                    (job.progress / job.total) * 100 : 0}%"
                     ></div>
                 </div>
                 <div class="flex justify-between text-xs text-base-content/60">
                     <span>{job.progress} / {job.total} files</span>
+               
                     <span class="uppercase font-bold tracking-wider">{job.status}</span>
                 </div>
             </div>
@@ -516,11 +521,13 @@
             <div>
                 <button 
                   class="btn btn-square btn-sm btn-ghost text-error hover:bg-error/10"
+            
                   on:click|stopPropagation={() => promptDelete(job.id)}
                   title="Remove"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+  
                   </svg>
                 </button>
             </div>
@@ -530,20 +537,20 @@
       </div>
     </div>
   {/if}
-
-  <dialog bind:this={deleteModal} class="modal modal-bottom sm:modal-middle" on:close={() => jobToDeleteId = null}>
-    <div class="modal-box">
-      <h3 class="font-bold text-lg text-error">Delete Task</h3>
-      <p class="py-4">Are you sure you want to remove this upload task? This action cannot be undone.</p>
-      
-      <div class="modal-action">
-          <button type="button" class="btn" on:click={cancelDelete}>Cancel</button>
-          <button type="button" class="btn btn-error" on:click={confirmDelete}>Yes, Delete</button>
-      </div>
-    </div>
-    <form method="dialog" class="modal-backdrop">
-        <button>close</button>
-    </form>
-  </dialog>
-
 </div>
+
+<dialog bind:this={deleteModal} class="modal modal-bottom sm:modal-middle" on:close={() => jobToDeleteId = null}>
+  <div class="modal-box">
+    <h3 class="font-bold text-lg text-error">Delete Task</h3>
+    <p class="py-4">Are you sure you want to remove this upload task?
+    This action cannot be undone.</p>
+    
+    <div class="modal-action">
+        <button type="button" class="btn" on:click={cancelDelete}>Cancel</button>
+        <button type="button" class="btn btn-error" on:click={confirmDelete}>Yes, Delete</button>
+    </div>
+  </div>
+  <form method="dialog" class="modal-backdrop">
+      <button>close</button>
+  </form>
+</dialog>

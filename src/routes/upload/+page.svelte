@@ -40,13 +40,16 @@
   let isManageMode = false;
   let selectedJobIds = new Set<string>();
   
-  // Reactive Helpers
+  // --- REACTIVE HELPERS (UPDATED) ---
   $: selectedCount = selectedJobIds.size;
   $: hasFinishedTasks = uploadQueue.some(item => item.status === 'done');
+  
+  // COUNT ONLY ACTIVE TASKS (Not 'done')
+  $: activeQueueCount = uploadQueue.filter(item => item.status !== 'done').length;
 
   // --- DELETE MODAL STATE ---
   let deleteModal: HTMLDialogElement;
-  let isBatchDelete = true; // Defaults to true since individual X is gone
+  let isBatchDelete = true;
 
   // --- QUEUE EXECUTION ---
   let executionQueue = Promise.resolve();
@@ -125,23 +128,19 @@
     selectedJobIds = selectedJobIds;
   }
 
-  // --- NEW: CLEAR FINISHED (No Modal) ---
+  // --- ACTIONS ---
   function clearFinishedTasks() {
-    // Directly filter out 'done' tasks without modal
     uploadQueue = uploadQueue.filter(item => item.status !== 'done');
-    // Clean up selection if any removed items were selected
     const remainingIds = new Set(uploadQueue.map(i => i.id));
     selectedJobIds = new Set([...selectedJobIds].filter(id => remainingIds.has(id)));
   }
 
-  // --- DELETE SELECTED (With Modal) ---
   function promptDeleteBatch() {
     if (selectedCount === 0) return;
     deleteModal.showModal();
   }
 
   function confirmDelete() {
-    // Remove all selected
     uploadQueue = uploadQueue.filter(item => !selectedJobIds.has(item.id));
     selectedJobIds.clear();
     selectedJobIds = selectedJobIds;
@@ -495,9 +494,9 @@
   </div>
 
   {#if uploadQueue.length > 0}
-    <div class="card bg-base-100 shadow-xl mt-6 overflow-hidden border border-base-200">
+    <div class="card bg-base-100 shadow-xl mt-6 border border-base-200 rounded-xl">
       
-      <div class="card-header p-4 bg-base-200 font-bold border-b border-base-300 flex items-center justify-between">
+      <div class="card-header p-4 bg-base-200 font-bold border-b border-base-300 flex items-center justify-between rounded-t-xl">
         <div class="flex items-center gap-3">
             {#if isManageMode}
                 <input 
@@ -508,10 +507,10 @@
                 />
             {/if}
             
-            <span>Upload Queue ({uploadQueue.length})</span>
+            <span>Upload Queue ({activeQueueCount})</span>
 
             {#if isManageMode && hasFinishedTasks}
-              <div class="tooltip" data-tip="Clear all finished tasks (No undo)">
+              <div class="tooltip tooltip-left" data-tip="Clear all finished tasks">
                 <button 
                   class="btn btn-xs btn-ghost gap-1 text-base-content/70 hover:text-primary transition-colors"
                   on:click={clearFinishedTasks}
@@ -545,7 +544,7 @@
         </div>
       </div>
 
-      <div class="max-h-[50vh] overflow-y-auto p-0 scrollbar-thin">
+      <div class="max-h-[50vh] overflow-y-auto p-0 scrollbar-thin rounded-b-xl">
         {#each uploadQueue as job (job.id)}
           <div 
             class="p-4 border-b border-base-200 last:border-none hover:bg-base-200/50 transition-colors flex items-center gap-4"
@@ -584,8 +583,7 @@
                     <span class="uppercase font-bold tracking-wider">{job.status}</span>
                 </div>
             </div>
-
-            </div>
+          </div>
         {/each}
       </div>
     </div>

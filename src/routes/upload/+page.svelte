@@ -4,7 +4,7 @@
   import { browser } from "$app/environment";
   import { themeChange } from "theme-change";
 
-  // --- PORTAL ACTION (Keeps modal safe from layout glitches) ---
+  // --- PORTAL ACTION ---
   function portal(node: HTMLElement) {
     if (!browser) return;
     document.body.appendChild(node);
@@ -39,13 +39,14 @@
   // --- MANAGE MODE STATE ---
   let isManageMode = false;
   let selectedJobIds = new Set<string>();
-  // We need a reactive version of the set size for UI logic
+  
+  // Reactive Helpers
   $: selectedCount = selectedJobIds.size;
+  $: hasFinishedTasks = uploadQueue.some(item => item.status === 'done');
 
   // --- DELETE MODAL STATE ---
   let deleteModal: HTMLDialogElement;
-  let jobToDeleteId: string | null = null; // For single delete (drag/drop mode)
-  let isBatchDelete = false; // Flag to know if we are deleting selection
+  let isBatchDelete = true; // Defaults to true since individual X is gone
 
   // --- QUEUE EXECUTION ---
   let executionQueue = Promise.resolve();
@@ -93,17 +94,16 @@
     return path.startsWith("MAD/");
   }
 
-  // --- SORTING HELPER (Natural Sort) ---
   function naturalSort(a: { name: string }, b: { name: string }) {
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
   }
 
-  // --- SELECTION HANDLERS ---
+  // --- MANAGE LOGIC ---
   function toggleManageMode() {
     isManageMode = !isManageMode;
     if (!isManageMode) {
         selectedJobIds.clear();
-        selectedJobIds = selectedJobIds; // trigger reactivity
+        selectedJobIds = selectedJobIds;
     }
   }
 
@@ -113,7 +113,7 @@
     } else {
         selectedJobIds.add(id);
     }
-    selectedJobIds = selectedJobIds; // trigger reactivity
+    selectedJobIds = selectedJobIds;
   }
 
   function toggleSelectAll() {
@@ -125,33 +125,26 @@
     selectedJobIds = selectedJobIds;
   }
 
-  // --- DELETE HANDLERS ---
-  // Single delete (X button outside manage mode)
-  function promptDeleteSingle(id: string) {
-    jobToDeleteId = id;
-    isBatchDelete = false;
-    deleteModal.showModal();
+  // --- NEW: CLEAR FINISHED (No Modal) ---
+  function clearFinishedTasks() {
+    // Directly filter out 'done' tasks without modal
+    uploadQueue = uploadQueue.filter(item => item.status !== 'done');
+    // Clean up selection if any removed items were selected
+    const remainingIds = new Set(uploadQueue.map(i => i.id));
+    selectedJobIds = new Set([...selectedJobIds].filter(id => remainingIds.has(id)));
   }
 
-  // Batch delete (Trash icon in manage mode)
+  // --- DELETE SELECTED (With Modal) ---
   function promptDeleteBatch() {
     if (selectedCount === 0) return;
-    isBatchDelete = true;
     deleteModal.showModal();
   }
 
   function confirmDelete() {
-    if (isBatchDelete) {
-        // Remove all selected
-        uploadQueue = uploadQueue.filter(item => !selectedJobIds.has(item.id));
-        selectedJobIds.clear();
-        selectedJobIds = selectedJobIds;
-        // Optional: Exit manage mode after delete?
-        // isManageMode = false; 
-    } else if (jobToDeleteId) {
-        // Remove single
-        uploadQueue = uploadQueue.filter(item => item.id !== jobToDeleteId);
-    }
+    // Remove all selected
+    uploadQueue = uploadQueue.filter(item => !selectedJobIds.has(item.id));
+    selectedJobIds.clear();
+    selectedJobIds = selectedJobIds;
     deleteModal.close();
   }
 
@@ -172,7 +165,6 @@
     const input = event.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
     
-    // Convert to array and SORT naturally immediately
     let files = Array.from(input.files);
     files.sort(naturalSort);
 
@@ -187,7 +179,6 @@
             folders.get(rootFolder)!.push(f);
         });
         
-        // Sort folder keys naturally too
         const folderNames = Array.from(folders.keys()).sort((a,b) => a.localeCompare(b, undefined, { numeric: true }));
 
         const newItems: QueueItem[] = folderNames.map(folderName => ({
@@ -206,7 +197,6 @@
         folderNames.forEach((folderName, i) => {
             const jobId = uploadQueue[startIndex + i].id;
             const folderFiles = folders.get(folderName)!;
-            // Also ensure files INSIDE folder are sorted (though we did sort 'files' initially)
             folderFiles.sort(naturalSort);
             addToQueue(() => processBatch(jobId, folderFiles, basePath));
         });
@@ -243,8 +233,6 @@
         const entry = items[i].webkitGetAsEntry();
         if (entry) rawEntries.push(entry);
     }
-
-    // Sort entries naturally
     rawEntries.sort(naturalSort);
     
     const newItems: QueueItem[] = rawEntries.map(e => ({
@@ -262,7 +250,6 @@
 
     rawEntries.forEach((entry, i) => {
         const jobId = uploadQueue[startIndex + i].id;
-        
         addToQueue(async () => {
              if (!isJobAlive(jobId)) return;
              if (entry.isDirectory) {
@@ -277,12 +264,10 @@
     });
   }
 
-  // --- PROCESSING LOGIC (Unchanged but compacted for context) ---
+  // --- PROCESSING LOGIC ---
   async function processBatch(jobId: string, files: File[], basePath: string) {
     if (!isJobAlive(jobId)) return;
     updateItem(jobId, { status: 'uploading', total: files.length, message: 'Starting...' });
-    
-    // Sort files within the batch before processing loop
     files.sort(naturalSort);
 
     for (let i = 0; i < files.length; i++) {
@@ -355,8 +340,6 @@
     const content = await zip.loadAsync(file);
     const files = Object.values(content.files).filter(e => !e.dir && IMAGE_EXT_RE.test(e.name));
     if (isJobAlive(jobId)) updateItem(jobId, { total: files.length, message: 'Uploading...' });
-    
-    // Sort CBZ contents naturally
     files.sort(naturalSort);
 
     for (let i = 0; i < files.length; i++) {
@@ -382,8 +365,6 @@
         const list = allHeaders.filter((h: any) => !h.flags.directory && IMAGE_EXT_RE.test(h.name));
         if (list.length === 0) throw new Error("No valid images found in CBR");
         if (isJobAlive(jobId)) updateItem(jobId, { total: list.length, message: 'Uploading...' });
-        
-        // Sort CBR contents naturally
         list.sort(naturalSort);
 
         for (let i = 0; i < list.length; i++) {
@@ -526,7 +507,22 @@
                   on:change={toggleSelectAll}
                 />
             {/if}
+            
             <span>Upload Queue ({uploadQueue.length})</span>
+
+            {#if isManageMode && hasFinishedTasks}
+              <div class="tooltip" data-tip="Clear all finished tasks (No undo)">
+                <button 
+                  class="btn btn-xs btn-ghost gap-1 text-base-content/70 hover:text-primary transition-colors"
+                  on:click={clearFinishedTasks}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Clear Finished
+                </button>
+              </div>
+            {/if}
         </div>
 
         <div class="flex items-center gap-2">
@@ -589,21 +585,7 @@
                 </div>
             </div>
 
-            {#if !isManageMode}
-                <div>
-                    <button 
-                      class="btn btn-square btn-sm btn-ghost text-error hover:bg-error/10"
-                      on:click|stopPropagation={() => promptDeleteSingle(job.id)}
-                      title="Remove"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                </div>
-            {/if}
-
-          </div>
+            </div>
         {/each}
       </div>
     </div>
@@ -614,19 +596,13 @@
     use:portal 
     bind:this={deleteModal} 
     class="modal modal-bottom sm:modal-middle" 
-    on:close={() => { jobToDeleteId = null; isBatchDelete = false; }}
+    on:close={() => { isBatchDelete = true; }}
     style="z-index: 99999;"
 >
   <div class="modal-box">
-    <h3 class="font-bold text-lg text-error">
-        {isBatchDelete ? 'Delete Multiple Tasks' : 'Delete Task'}
-    </h3>
+    <h3 class="font-bold text-lg text-error">Delete Selected Tasks</h3>
     <p class="py-4">
-        {#if isBatchDelete}
-            Are you sure you want to remove <b>{selectedCount}</b> tasks?
-        {:else}
-            Are you sure you want to remove this upload task?
-        {/if}
+        Are you sure you want to remove <b>{selectedCount}</b> tasks?
         This action cannot be undone.
     </p>
     

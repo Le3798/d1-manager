@@ -92,13 +92,12 @@
     if (jobToDeleteId) {
       // Remove from UI
       uploadQueue = uploadQueue.filter(item => item.id !== jobToDeleteId);
-      jobToDeleteId = null;
     }
+    // Close manually
     deleteModal.close();
   }
 
   function cancelDelete() {
-    jobToDeleteId = null;
     deleteModal.close();
   }
 
@@ -532,19 +531,18 @@
     </div>
   {/if}
 
-  <dialog bind:this={deleteModal} class="modal modal-bottom sm:modal-middle">
+  <dialog bind:this={deleteModal} class="modal modal-bottom sm:modal-middle" on:close={() => jobToDeleteId = null}>
     <div class="modal-box">
       <h3 class="font-bold text-lg text-error">Delete Task</h3>
       <p class="py-4">Are you sure you want to remove this upload task? This action cannot be undone.</p>
+      
       <div class="modal-action">
-        <form method="dialog" class="flex gap-2">
-          <button class="btn" on:click={cancelDelete}>Cancel</button>
-          <button class="btn btn-error" on:click={confirmDelete}>Yes, Delete</button>
-        </form>
+          <button type="button" class="btn" on:click={cancelDelete}>Cancel</button>
+          <button type="button" class="btn btn-error" on:click={confirmDelete}>Yes, Delete</button>
       </div>
     </div>
     <form method="dialog" class="modal-backdrop">
-        <button on:click={cancelDelete}>close</button>
+        <button>close</button>
     </form>
   </dialog>
 

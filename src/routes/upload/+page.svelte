@@ -25,8 +25,11 @@
   let folderInput: HTMLInputElement;
   let uploadMode: 'files' | 'folder' = 'files';
 
-  // --- QUEUE MANAGEMENT (Sequential Uploads) ---
-  // This promise chain ensures EVERY file (CBZ, CBR, or regular) waits its turn.
+  // Delete Modal State
+  let deleteModal: HTMLDialogElement;
+  let jobToDeleteId: string | null = null;
+
+  // --- QUEUE MANAGEMENT ---
   let executionQueue = Promise.resolve();
 
   function addToQueue(task: () => Promise<void>) {
@@ -79,7 +82,32 @@
     uploadMode === 'folder' ? folderInput.click() : fileInput.click();
   }
 
-  // --- INPUT CHANGE HANDLER (Click) ---
+  // --- DELETE HANDLERS ---
+  function promptDelete(id: string) {
+    jobToDeleteId = id;
+    deleteModal.showModal();
+  }
+
+  function confirmDelete() {
+    if (jobToDeleteId) {
+      // Remove from UI
+      uploadQueue = uploadQueue.filter(item => item.id !== jobToDeleteId);
+      jobToDeleteId = null;
+    }
+    deleteModal.close();
+  }
+
+  function cancelDelete() {
+    jobToDeleteId = null;
+    deleteModal.close();
+  }
+
+  // Helper to check if job was deleted during processing
+  function isJobAlive(id: string): boolean {
+    return uploadQueue.some(item => item.id === id);
+  }
+
+  // --- INPUT CHANGE HANDLER ---
   function handleFileInputChange(event: Event) {
     const input = event.target as HTMLInputElement;
     if (!input.files || input.files.length === 0) return;
@@ -110,7 +138,7 @@
         const startIndex = uploadQueue.length;
         uploadQueue = [...uploadQueue, ...newItems];
 
-        // Queue each folder job sequentially
+        // Queue folders
         Array.from(folders.keys()).forEach((folderName, i) => {
             const jobId = uploadQueue[startIndex + i].id;
             const folderFiles = folders.get(folderName)!;
@@ -131,7 +159,7 @@
         const startIndex = uploadQueue.length;
         uploadQueue = [...uploadQueue, ...newItems];
 
-        // Queue each file job sequentially
+        // Queue files
         files.forEach((f, i) => {
             const jobId = uploadQueue[startIndex + i].id;
             addToQueue(() => processSingleFile(jobId, f, basePath));
@@ -165,15 +193,17 @@
     const startIndex = uploadQueue.length;
     uploadQueue = [...uploadQueue, ...newItems];
 
-    // Queue Jobs Sequentially
+    // Queue Jobs
     entries.forEach((entry, i) => {
         const jobId = uploadQueue[startIndex + i].id;
         
         addToQueue(async () => {
+             // Check if deleted before starting
+             if (!isJobAlive(jobId)) return;
+
              if (entry.isDirectory) {
                 await processDirectoryEntry(jobId, entry as FileSystemDirectoryEntry, basePath);
             } else {
-                // Promisify file retrieval so the queue waits for it
                 const file = await new Promise<File>((resolve, reject) => {
                     (entry as FileSystemFileEntry).file(resolve, reject);
                 });
@@ -183,10 +213,14 @@
     });
   }
 
-  // --- LOGIC: PROCESS BATCH (Folder) ---
+  // --- LOGIC: PROCESS BATCH ---
   async function processBatch(jobId: string, files: File[], basePath: string) {
+    if (!isJobAlive(jobId)) return; // Abort if deleted
+
     updateItem(jobId, { status: 'uploading', total: files.length, message: 'Starting...' });
     for (let i = 0; i < files.length; i++) {
+        if (!isJobAlive(jobId)) return; // Stop loop if deleted
+
         const f = files[i];
         updateItem(jobId, { progress: i + 1, message: `Uploading ${f.name}...` });
         try {
@@ -198,15 +232,13 @@
             if (isMangaMode(basePath)) {
                  const parts = relPath.split('/');
                  const folderName = parts.length > 1 ? parts.slice(0, -1).join('/') : "";
-                 
                  targetPath = `${basePath}/${folderName}`;
-                 // Rename logic
                  if (IMAGE_EXT_RE.test(f.name)) {
                      const ext = (f.name.split(".").pop() || "").toLowerCase() || "jpg";
                      finalName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
                  }
             } else {
-                // BOOK MODE LOGIC
+                // BOOK MODE
                 const fullPath = basePath ? `${basePath}/${relPath}` : relPath;
                 const lastSlash = fullPath.lastIndexOf('/');
                 targetPath = lastSlash !== -1 ? fullPath.substring(0, lastSlash) : "";
@@ -218,17 +250,18 @@
             console.error(e);
         }
     }
-    updateItem(jobId, { status: 'done', message: 'Completed' });
+    if (isJobAlive(jobId)) updateItem(jobId, { status: 'done', message: 'Completed' });
   }
 
   // --- LOGIC: PROCESS SINGLE FILE ---
   async function processSingleFile(jobId: string, file: File, basePath: string) {
+    if (!isJobAlive(jobId)) return;
+
     updateItem(jobId, { status: 'uploading', total: 1, message: 'Processing...' });
     try {
         const name = file.name.toLowerCase();
         let targetPath = basePath;
         
-        // MANGA MODE CHECKS
         if (isMangaMode(basePath)) {
             const folderName = file.name.replace(/\.[^/.]+$/, "");
             targetPath = `${basePath}/${folderName}`;
@@ -244,21 +277,20 @@
             throw new Error("Manga Mode: Single files must be .cbz/.cbr");
         } 
         
-        // BOOK MODE
         await uploadFile(file.name, file, basePath);
-        updateItem(jobId, { progress: 1, status: 'done', message: 'Done' });
+        if (isJobAlive(jobId)) updateItem(jobId, { progress: 1, status: 'done', message: 'Done' });
 
     } catch (e: any) {
-        updateItem(jobId, { status: 'error', message: e.message });
+        if (isJobAlive(jobId)) updateItem(jobId, { status: 'error', message: e.message });
     }
   }
 
-  // --- LOGIC: DIRECTORY ENTRY (Drag & Drop Folder) ---
+  // --- LOGIC: DIRECTORY ENTRY ---
   async function processDirectoryEntry(jobId: string, entry: FileSystemDirectoryEntry, basePath: string) {
+    if (!isJobAlive(jobId)) return;
     updateItem(jobId, { message: 'Scanning directory...' });
-    const entries = await readAllDirectoryEntries(entry); 
     
-    // Convert Entries to Files
+    const entries = await readAllDirectoryEntries(entry);
     const files: File[] = [];
     for (const e of entries) {
         const f = await new Promise<File>((resolve) => e.file(resolve));
@@ -268,33 +300,40 @@
         files.push(f);
     }
     
-    // Reuse Batch Logic
     await processBatch(jobId, files, basePath);
   }
 
   // --- CBZ HANDLER ---
   async function processCBZ(jobId: string, file: File, targetPath: string) {
+    if (!isJobAlive(jobId)) return;
     updateItem(jobId, { message: 'Unzipping...' });
+    
     const zip = new JSZip();
     const content = await zip.loadAsync(file);
     const files = Object.values(content.files).filter(e => !e.dir && IMAGE_EXT_RE.test(e.name));
-    updateItem(jobId, { total: files.length, message: 'Uploading...' });
+    
+    if (isJobAlive(jobId)) updateItem(jobId, { total: files.length, message: 'Uploading...' });
     
     files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     for (let i = 0; i < files.length; i++) {
+        if (!isJobAlive(jobId)) return; // Stop if deleted
+
         const entry = files[i];
         const blob = await entry.async("blob");
         const ext = entry.name.split('.').pop() || 'jpg';
         const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
+        
         updateItem(jobId, { progress: i + 1, message: `Uploading ${i+1}/${files.length}` });
         await uploadFile(newName, blob, targetPath);
     }
-    updateItem(jobId, { status: 'done', message: 'Completed' });
+    if (isJobAlive(jobId)) updateItem(jobId, { status: 'done', message: 'Completed' });
   }
 
   // --- CBR HANDLER ---
   async function processCBR(jobId: string, file: File, targetPath: string) {
+    if (!isJobAlive(jobId)) return;
     updateItem(jobId, { message: 'Unrar...' });
+    
     try {
         const ab = await file.arrayBuffer();
         const extractor = await createExtractorFromData!({ data: ab, wasmBinary });
@@ -307,11 +346,13 @@
 
         if (list.length === 0) throw new Error("No valid images found in CBR");
 
-        updateItem(jobId, { total: list.length, message: 'Uploading...' });
+        if (isJobAlive(jobId)) updateItem(jobId, { total: list.length, message: 'Uploading...' });
         
         list.sort((a: any, b: any) => a.name.localeCompare(b.name, undefined, { numeric: true }));
         
         for (let i = 0; i < list.length; i++) {
+            if (!isJobAlive(jobId)) return; // Stop if deleted
+
             const h = list[i];
             const extracted = extractor.extract({ files: [h.name] });
             const [arc] = [...extracted.files];
@@ -325,15 +366,17 @@
                 await uploadFile(newName, blob, targetPath);
             }
         }
-        updateItem(jobId, { status: 'done', message: 'Completed' });
+        if (isJobAlive(jobId)) updateItem(jobId, { status: 'done', message: 'Completed' });
     } catch (err: any) {
         console.error("CBR Error:", err);
-        updateItem(jobId, { status: 'error', message: "Failed: " + (err.message || "Invalid CBR") });
+        if (isJobAlive(jobId)) updateItem(jobId, { status: 'error', message: "Failed: " + (err.message || "Invalid CBR") });
     }
   }
 
   // --- HELPERS ---
   function updateItem(id: string, updates: Partial<QueueItem>) {
+    // Only update if it still exists
+    if (!isJobAlive(id)) return;
     uploadQueue = uploadQueue.map(item => item.id === id ? { ...item, ...updates } : item);
   }
 
@@ -450,26 +493,59 @@
       </div>
       <div class="max-h-[50vh] overflow-y-auto p-0 scrollbar-thin">
         {#each uploadQueue as job (job.id)}
-          <div class="p-4 border-b border-base-200 last:border-none hover:bg-base-200/50 transition-colors">
-            <div class="flex justify-between mb-2">
-              <span class="font-medium truncate pr-4">{job.name}</span>
-              <span class="text-sm opacity-70" class:text-error={job.status==='error'} class:text-success={job.status==='done'}>{job.message}</span>
+          <div class="p-4 border-b border-base-200 last:border-none hover:bg-base-200/50 transition-colors flex items-center gap-4">
+            
+            <div class="flex-1 min-w-0">
+                <div class="flex justify-between mb-2">
+                    <span class="font-medium truncate pr-4">{job.name}</span>
+                    <span class="text-sm opacity-70" class:text-error={job.status==='error'} class:text-success={job.status==='done'}>{job.message}</span>
+                </div>
+                <div class="w-full bg-base-300 rounded-full h-2.5 mb-2">
+                    <div class="h-2.5 rounded-full transition-all duration-300" 
+                    class:bg-primary={job.status !== 'error' && job.status !== 'done'}
+                    class:bg-success={job.status === 'done'}
+                    class:bg-error={job.status === 'error'}
+                    style="width: {job.total ? (job.progress / job.total) * 100 : 0}%"
+                    ></div>
+                </div>
+                <div class="flex justify-between text-xs text-base-content/60">
+                    <span>{job.progress} / {job.total} files</span>
+                    <span class="uppercase font-bold tracking-wider">{job.status}</span>
+                </div>
             </div>
-            <div class="w-full bg-base-300 rounded-full h-2.5 mb-2">
-              <div class="h-2.5 rounded-full transition-all duration-300" 
-                class:bg-primary={job.status !== 'error' && job.status !== 'done'}
-                class:bg-success={job.status === 'done'}
-                class:bg-error={job.status === 'error'}
-                style="width: {job.total ? (job.progress / job.total) * 100 : 0}%"
-              ></div>
+
+            <div>
+                <button 
+                  class="btn btn-square btn-sm btn-ghost text-error hover:bg-error/10"
+                  on:click|stopPropagation={() => promptDelete(job.id)}
+                  title="Remove"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
             </div>
-            <div class="flex justify-between text-xs text-base-content/60">
-              <span>{job.progress} / {job.total} files</span>
-              <span class="uppercase font-bold tracking-wider">{job.status}</span>
-            </div>
+
           </div>
         {/each}
       </div>
     </div>
   {/if}
+
+  <dialog bind:this={deleteModal} class="modal modal-bottom sm:modal-middle">
+    <div class="modal-box">
+      <h3 class="font-bold text-lg text-error">Delete Task</h3>
+      <p class="py-4">Are you sure you want to remove this upload task? This action cannot be undone.</p>
+      <div class="modal-action">
+        <form method="dialog" class="flex gap-2">
+          <button class="btn" on:click={cancelDelete}>Cancel</button>
+          <button class="btn btn-error" on:click={confirmDelete}>Yes, Delete</button>
+        </form>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button on:click={cancelDelete}>close</button>
+    </form>
+  </dialog>
+
 </div>

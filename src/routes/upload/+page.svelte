@@ -1,28 +1,17 @@
 <script lang="ts">
   import JSZip from "jszip";
-  import { onMount, onDestroy } from "svelte"; // Added onDestroy for safety
+  import { onMount, onDestroy } from "svelte";
   import { browser } from "$app/environment";
   import { themeChange } from "theme-change";
 
-  // --- SAFE PORTAL ACTION ---
-  // Fixes the "Blank Screen" crash by ensuring safe detachment
-  function portal(node: HTMLElement) {
-    if (!browser) return;
-    
-    // Move node to body to escape parent stacking contexts (z-index)
-    document.body.appendChild(node);
-    
-    return {
-      destroy() {
-        // Use the native remove() method which safely handles the node 
-        // regardless of its current parent (body or otherwise).
-        // This prevents the "NotFoundError" crash in Svelte's runtime.
-        if (node && node.parentNode) {
-            node.parentNode.removeChild(node);
-        }
-      }
-    };
-  }
+  // --- SAFETY CLEANUP ---
+  // Ensure the modal closes if the user navigates away while it's open.
+  // This prevents scroll-locking or "stuck" overlay issues.
+  onDestroy(() => {
+    if (browser && deleteModal && deleteModal.open) {
+      deleteModal.close();
+    }
+  });
 
   // --- TYPES ---
   interface QueueItem {
@@ -39,16 +28,13 @@
   let basePath = "";
   let uploadQueue: QueueItem[] = [];
   let isProcessing = false;
-  
   // Inputs
   let fileInput: HTMLInputElement; 
   let folderInput: HTMLInputElement;
   let uploadMode: 'files' | 'folder' = 'files';
-  
   // --- MANAGE MODE STATE ---
   let isManageMode = false;
   let selectedJobIds = new Set<string>();
-  
   // --- REACTIVE HELPERS ---
   $: selectedCount = selectedJobIds.size;
   $: hasFinishedTasks = uploadQueue.some(item => item.status === 'done');
@@ -74,7 +60,6 @@
     "luxury", "dracula", "cmyk", "autumn", "business", "acid", "lemonade",
     "night", "coffee", "winter", "dim", "nord", "sunset",
   ];
-  
   let unrarReady = false;
   let wasmBinary: ArrayBuffer | null = null;
   let createExtractorFromData: null | ((opts: any) => Promise<any>) = null;
@@ -83,7 +68,7 @@
   const mimeByExt: Record<string, string> = {
     jpg: "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"
   };
-  
+
   onMount(async () => {
     if (!browser) return;
     themeChange(false);
@@ -175,7 +160,6 @@
     files.sort(naturalSort);
 
     const isFolderUpload = input.webkitdirectory;
-    
     if (isFolderUpload) {
         const folders = new Map<string, File[]>();
         files.forEach(f => {
@@ -184,9 +168,7 @@
             if (!folders.has(rootFolder)) folders.set(rootFolder, []);
             folders.get(rootFolder)!.push(f);
         });
-        
         const folderNames = Array.from(folders.keys()).sort((a,b) => a.localeCompare(b, undefined, { numeric: true }));
-
         const newItems: QueueItem[] = folderNames.map(folderName => ({
             id: crypto.randomUUID(),
             name: folderName,
@@ -199,7 +181,6 @@
         
         const startIndex = uploadQueue.length;
         uploadQueue = [...uploadQueue, ...newItems];
-        
         folderNames.forEach((folderName, i) => {
             const jobId = uploadQueue[startIndex + i].id;
             const folderFiles = folders.get(folderName)!;
@@ -250,7 +231,6 @@
         total: 0, 
         message: 'Waiting...'
     }));
-    
     const startIndex = uploadQueue.length;
     uploadQueue = [...uploadQueue, ...newItems];
 
@@ -275,7 +255,6 @@
     if (!isJobAlive(jobId)) return;
     updateItem(jobId, { status: 'uploading', total: files.length, message: 'Starting...' });
     files.sort(naturalSort);
-
     for (let i = 0; i < files.length; i++) {
         if (!isJobAlive(jobId)) return;
         const f = files[i];
@@ -323,7 +302,8 @@
         } 
         await uploadFile(file.name, file, basePath);
         if (isJobAlive(jobId)) updateItem(jobId, { progress: 1, status: 'done', message: 'Done' });
-    } catch (e: any) { if (isJobAlive(jobId)) updateItem(jobId, { status: 'error', message: e.message }); }
+    } catch (e: any) { if (isJobAlive(jobId)) updateItem(jobId, { status: 'error', message: e.message });
+    }
   }
 
   async function processDirectoryEntry(jobId: string, entry: FileSystemDirectoryEntry, basePath: string) {
@@ -347,7 +327,6 @@
     const files = Object.values(content.files).filter(e => !e.dir && IMAGE_EXT_RE.test(e.name));
     if (isJobAlive(jobId)) updateItem(jobId, { total: files.length, message: 'Uploading...' });
     files.sort(naturalSort);
-
     for (let i = 0; i < files.length; i++) {
         if (!isJobAlive(jobId)) return;
         const entry = files[i];
@@ -372,7 +351,6 @@
         if (list.length === 0) throw new Error("No valid images found in CBR");
         if (isJobAlive(jobId)) updateItem(jobId, { total: list.length, message: 'Uploading...' });
         list.sort(naturalSort);
-
         for (let i = 0; i < list.length; i++) {
             if (!isJobAlive(jobId)) return;
             const h = list[i];
@@ -396,6 +374,7 @@
     if (!isJobAlive(id)) return;
     uploadQueue = uploadQueue.map(item => item.id === id ? { ...item, ...updates } : item);
   }
+
   async function uploadFile(filename: string, blob: Blob | File, path: string) {
     const fd = new FormData();
     fd.append("file", blob);
@@ -404,6 +383,7 @@
     const res = await fetch("/api/upload-r2", { method: "POST", body: fd });
     if (!res.ok) throw new Error("Upload failed");
   }
+
   async function readAllDirectoryEntries(directoryReader: FileSystemDirectoryEntry) {
     const reader = directoryReader.createReader();
     let entries: FileSystemEntry[] = [];
@@ -532,7 +512,8 @@
         </div>
 
         <div class="flex items-center gap-2">
-            {#if isManageMode && selectedCount > 0}
+          
+          {#if isManageMode && selectedCount > 0}
                 <button 
                     class="btn btn-sm btn-error btn-square mr-2 animate-pulse" 
                     on:click={promptDeleteBatch}
@@ -578,7 +559,7 @@
                 </div>
        
                 <div class="w-full bg-base-300 rounded-full h-2.5 mb-2">
-                    <div class="h-2.5 rounded-full transition-all duration-300" 
+                   <div class="h-2.5 rounded-full transition-all duration-300" 
                     class:bg-primary={job.status !== 'error' && job.status !== 'done'}
                     class:bg-success={job.status === 'done'}
                     class:bg-error={job.status === 'error'}
@@ -598,7 +579,6 @@
 </div>
 
 <dialog 
-    use:portal 
     bind:this={deleteModal} 
     class="modal modal-bottom sm:modal-middle" 
     on:close={() => { isBatchDelete = true; }}

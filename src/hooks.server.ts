@@ -10,17 +10,21 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	const env = event.platform?.env || {};
 
-// 1. Let the auto-discovery try its best
-const detectedDBs = DBMS(env);
+	// 1. Let the auto-discovery try its best
+	const detectedDBs = DBMS(env);
 
-// 2. Manually inject your new DB to guarantee it shows up
-// The key "Manga DB" is what will appear in your dropdown menu.
-if (env.Manga) {
-    detectedDBs["Manga Library"] = env.Manga;
-}
+	// 2. Manually inject your new DB to guarantee it shows up
+	// The key "Manga DB" is what will appear in your dropdown menu.
+	if (env.Manga) {
+		detectedDBs["Manga"] = env.Manga;
+	}
 
-// 3. Assign to locals
-event.locals.db = detectedDBs;
+	if (env.Magazines) {
+		detectedDBs["Magazines"] = env.Magazines;
+	}
+
+	// 3. Assign to locals
+	event.locals.db = detectedDBs;
 
 	const result = await resolve(event);
 	return result;

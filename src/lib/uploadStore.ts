@@ -189,12 +189,33 @@ async function uploadFile(filename: string, blob: Blob | File, path: string) {
 	fd.append("filename", filename);
 	fd.append("folderPath", path);
 
-	// Add the destination flag based on your existing manga check
 	const destination = isMangaMode(path) ? "b2" : "r2";
 	fd.append("destination", destination);
 
-	const res = await fetch("/api/upload-r2", { method: "POST", body: fd });
-	if (!res.ok) throw new Error("Upload failed");
+	// 1. Create a timeout controller (15 seconds)
+	const controller = new AbortController();
+	const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+	try {
+		// 2. Attach the abort signal to the fetch request
+		const res = await fetch("/api/upload-r2", {
+			method: "POST",
+			body: fd,
+			signal: controller.signal,
+		});
+
+		// 3. Clear the timeout if the request succeeds
+		clearTimeout(timeoutId);
+
+		if (!res.ok) throw new Error(`Upload failed with status: ${res.status}`);
+	} catch (error: any) {
+		clearTimeout(timeoutId);
+		// If it was aborted by our timeout, provide a clear message for the retry loop
+		if (error.name === "AbortError") {
+			throw new Error("Upload timed out after 15 seconds");
+		}
+		throw error;
+	}
 }
 
 async function processBatch(jobId: string, files: File[], path: string) {

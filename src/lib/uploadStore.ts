@@ -188,32 +188,28 @@ async function uploadFile(filename: string, blob: Blob | File, path: string) {
 	fd.append("file", blob);
 	fd.append("filename", filename);
 	fd.append("folderPath", path);
+	fd.append("destination", isMangaMode(path) ? "b2" : "r2");
 
-	const destination = isMangaMode(path) ? "b2" : "r2";
-	fd.append("destination", destination);
-
-	// 1. Create a timeout controller (15 seconds)
 	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), 15000);
+	const timeoutId = setTimeout(() => controller.abort(), 30000); // Increased to 30s
 
 	try {
-		// 2. Attach the abort signal to the fetch request
 		const res = await fetch("/api/upload-r2", {
 			method: "POST",
 			body: fd,
 			signal: controller.signal,
 		});
 
-		// 3. Clear the timeout if the request succeeds
 		clearTimeout(timeoutId);
 
-		if (!res.ok) throw new Error(`Upload failed with status: ${res.status}`);
+		if (!res.ok) {
+			// Specifically catch rate limit HTTP status
+			if (res.status === 429) throw new Error("RATE_LIMIT");
+			throw new Error(`Upload failed: ${res.status}`);
+		}
 	} catch (error: any) {
 		clearTimeout(timeoutId);
-		// If it was aborted by our timeout, provide a clear message for the retry loop
-		if (error.name === "AbortError") {
-			throw new Error("Upload timed out after 15 seconds");
-		}
+		if (error.name === "AbortError") throw new Error("Upload timed out");
 		throw error;
 	}
 }
@@ -254,24 +250,32 @@ async function processBatch(jobId: string, files: File[], path: string) {
 
 		// The critical retry loop
 		let success = false;
-		let maxRetries = 5;
+		let maxRetries = 10;
 
 		for (let attempt = 1; attempt <= maxRetries; attempt++) {
 			try {
 				await uploadFile(finalName, f, targetPath);
 				success = true;
-				break; // File uploaded successfully, exit the retry loop
+				break;
 			} catch (err: any) {
-				console.warn(`Attempt ${attempt} failed for ${finalName}. Retrying...`);
-				// Exponential backoff: waits 2s, 4s, 8s, 16s, 32s
-				const backoffDelay = Math.pow(2, attempt - 1) * 2000;
-				await new Promise((resolve) => setTimeout(resolve, backoffDelay));
+				console.warn(`Attempt ${attempt} failed for ${finalName}: ${err.message}`);
+
+				if (err.message === "RATE_LIMIT") {
+					updateItem(jobId, { message: `Rate limited! Sleeping 60s...` });
+					// If the server explicitly says "Too Many Requests", sleep for a full minute
+					await new Promise((resolve) => setTimeout(resolve, 60000));
+				} else {
+					// Standard exponential backoff, capped at 30 seconds max per attempt
+					const backoffDelay = Math.min(Math.pow(2, attempt - 1) * 2000, 30000);
+					updateItem(jobId, { message: `Error. Retrying in ${backoffDelay / 1000}s...` });
+					await new Promise((resolve) => setTimeout(resolve, backoffDelay));
+				}
 			}
 		}
 
 		if (!success) {
 			updateItem(jobId, { status: "error", message: `Failed at page ${i + 1}` });
-			return; // Stop the whole job if a page fundamentally fails
+			return;
 		}
 
 		// 1. Standard small pause between every file

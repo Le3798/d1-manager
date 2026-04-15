@@ -203,64 +203,54 @@ async function processBatch(jobId: string, files: File[], path: string) {
 
 	for (let i = 0; i < files.length; i++) {
 		if (!isJobAlive(jobId)) return;
+
 		const f = files[i];
-		updateItem(jobId, { progress: i + 1, message: `Uploading ${f.name}...` });
+		updateItem(jobId, {
+			progress: i + 1,
+			message: `Uploading page ${i + 1}/${files.length}...`,
+		});
 
-		try {
-			const relPath = f.webkitRelativePath || f.name;
-			let targetPath = path;
-			let finalName = f.name;
+		let targetPath = path;
+		let finalName = f.name;
 
-			if (isMangaMode(path)) {
-				const parts = relPath.split("/");
-				const folderName = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
-				targetPath = `${path}/${folderName}`;
-				if (IMAGE_EXT_RE.test(f.name)) {
-					const ext = (f.name.split(".").pop() || "").toLowerCase() || "jpg";
-					finalName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
-				}
-			} else {
-				const fullPath = path ? `${path}/${relPath}` : relPath;
-				const lastSlash = fullPath.lastIndexOf("/");
-				targetPath = lastSlash !== -1 ? fullPath.substring(0, lastSlash) : "";
-				finalName = f.name;
+		if (isMangaMode(path)) {
+			const parts = relPath.split("/");
+			const folderName = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+			targetPath = `${path}/${folderName}`;
+			if (IMAGE_EXT_RE.test(f.name)) {
+				const ext = (f.name.split(".").pop() || "").toLowerCase() || "jpg";
+				finalName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
 			}
-
-			// --- NEW: ROBUST RETRY LOGIC ---
-			let success = false;
-			let lastError = null;
-			const maxRetries = 3;
-
-			for (let attempt = 1; attempt <= maxRetries; attempt++) {
-				try {
-					await uploadFile(finalName, f, targetPath);
-					success = true;
-					break; // Success! Break out of the retry loop
-				} catch (err: any) {
-					lastError = err;
-					console.warn(
-						`Upload failed for ${finalName} (Attempt ${attempt}/${maxRetries}). Retrying...`,
-					);
-					// If we get a 503, wait 2 seconds before trying again to let the server recover
-					await new Promise((r) => setTimeout(r, 2000));
-				}
-			}
-
-			// If it still fails after 3 attempts, we MUST throw an error so the manga isn't missing pages
-			if (!success) {
-				throw new Error(`Failed to upload ${finalName} after ${maxRetries} attempts.`);
-			}
-
-			// Add a tiny 50ms breather between successful files to prevent rate-limiting
-			await new Promise((r) => setTimeout(r, 50));
-		} catch (e: any) {
-			console.error(e);
-			// Mark the job as error and STOP the loop so you know exactly which manga broke
-			if (isJobAlive(jobId)) {
-				updateItem(jobId, { status: "error", message: e.message || "Upload failed" });
-			}
-			return; // Critically stops the batch so it doesn't continue with missing pages!
+		} else {
+			const fullPath = path ? `${path}/${relPath}` : relPath;
+			const lastSlash = fullPath.lastIndexOf("/");
+			targetPath = lastSlash !== -1 ? fullPath.substring(0, lastSlash) : "";
+			finalName = f.name;
 		}
+
+		// The critical retry loop
+		let success = false;
+		let maxRetries = 3;
+
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			try {
+				await uploadFile(finalName, f, targetPath);
+				success = true;
+				break; // File uploaded successfully, exit the retry loop
+			} catch (err: any) {
+				console.warn(`Attempt ${attempt} failed for ${finalName}. Retrying...`);
+				// Wait 2 seconds before retrying to let the B2 server breathe
+				await new Promise((resolve) => setTimeout(resolve, 2000));
+			}
+		}
+
+		if (!success) {
+			updateItem(jobId, { status: "error", message: `Failed at page ${i + 1}` });
+			return; // Stop the whole job if a page fundamentally fails
+		}
+
+		// Add a tiny 50ms pause between successful pages
+		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 
 	if (isJobAlive(jobId)) updateItem(jobId, { status: "done", message: "Completed" });
@@ -293,27 +283,39 @@ async function processSingleFile(jobId: string, file: File, path: string) {
 	}
 }
 
-async function processCBZ(jobId: string, file: File, targetPath: string) {
+// Inside $lib/uploadStore.ts
+
+async function processCBZ(jobId: string, file: File, path: string) {
 	if (!isJobAlive(jobId)) return;
-	updateItem(jobId, { message: "Unzipping..." });
-	const zip = new JSZip();
-	const content = await zip.loadAsync(file);
-	const files = Object.values(content.files).filter((e) => !e.dir && IMAGE_EXT_RE.test(e.name));
 
-	if (isJobAlive(jobId)) updateItem(jobId, { total: files.length, message: "Uploading..." });
-	files.sort(naturalSort);
+	updateItem(jobId, { status: "scanning", message: "Unzipping CBZ..." });
 
-	for (let i = 0; i < files.length; i++) {
-		if (!isJobAlive(jobId)) return;
-		const entry = files[i];
-		const blob = await entry.async("blob");
-		const ext = entry.name.split(".").pop() || "jpg";
-		const newName = `page_${String(i + 1).padStart(3, "0")}_de.${ext}`;
+	try {
+		// 1. Read the zip file in the browser
+		const zip = new JSZip();
+		const loadedZip = await zip.loadAsync(file);
 
-		updateItem(jobId, { progress: i + 1, message: `Uploading ${i + 1}/${files.length}` });
-		await uploadFile(newName, blob, targetPath);
+		// 2. Extract only the images
+		const files: File[] = [];
+		for (const [relativePath, zipEntry] of Object.entries(loadedZip.files)) {
+			if (!zipEntry.dir && IMAGE_EXT_RE.test(relativePath)) {
+				const blob = await zipEntry.async("blob");
+				// Convert Blob to File so our uploader knows how to handle it
+				const extractedFile = new File([blob], relativePath, { type: blob.type });
+				files.push(extractedFile);
+			}
+		}
+
+		// Sort them so pages are in order (page_001, page_002, etc.)
+		files.sort((a, b) => naturalSort(a.name, b.name));
+
+		// 3. Pass to the robust batch processor
+		// DO NOT use Promise.all(files.map(...)) here!
+		await processBatch(jobId, files, path);
+	} catch (e: any) {
+		console.error("CBZ processing error:", e);
+		if (isJobAlive(jobId)) updateItem(jobId, { status: "error", message: "Invalid CBZ file" });
 	}
-	if (isJobAlive(jobId)) updateItem(jobId, { status: "done", message: "Completed" });
 }
 
 async function processCBR(jobId: string, file: File, targetPath: string) {

@@ -233,7 +233,7 @@ async function processBatch(jobId: string, files: File[], path: string) {
 
 		// The critical retry loop
 		let success = false;
-		let maxRetries = 3;
+		let maxRetries = 5;
 
 		for (let attempt = 1; attempt <= maxRetries; attempt++) {
 			try {
@@ -242,8 +242,9 @@ async function processBatch(jobId: string, files: File[], path: string) {
 				break; // File uploaded successfully, exit the retry loop
 			} catch (err: any) {
 				console.warn(`Attempt ${attempt} failed for ${finalName}. Retrying...`);
-				// Wait 2 seconds before retrying to let the B2 server breathe
-				await new Promise((resolve) => setTimeout(resolve, 2000));
+				// Exponential backoff: waits 2s, 4s, 8s, 16s, 32s
+				const backoffDelay = Math.pow(2, attempt - 1) * 2000;
+				await new Promise((resolve) => setTimeout(resolve, backoffDelay));
 			}
 		}
 
@@ -253,7 +254,7 @@ async function processBatch(jobId: string, files: File[], path: string) {
 		}
 
 		// Add a tiny 50ms pause between successful pages
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		await new Promise((resolve) => setTimeout(resolve, 200));
 	}
 
 	if (isJobAlive(jobId)) updateItem(jobId, { status: "done", message: "Completed" });

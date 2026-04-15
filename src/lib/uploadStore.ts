@@ -205,6 +205,7 @@ async function processBatch(jobId: string, files: File[], path: string) {
 		if (!isJobAlive(jobId)) return;
 		const f = files[i];
 		updateItem(jobId, { progress: i + 1, message: `Uploading ${f.name}...` });
+
 		try {
 			const relPath = f.webkitRelativePath || f.name;
 			let targetPath = path;
@@ -224,11 +225,44 @@ async function processBatch(jobId: string, files: File[], path: string) {
 				targetPath = lastSlash !== -1 ? fullPath.substring(0, lastSlash) : "";
 				finalName = f.name;
 			}
-			await uploadFile(finalName, f, targetPath);
+
+			// --- NEW: ROBUST RETRY LOGIC ---
+			let success = false;
+			let lastError = null;
+			const maxRetries = 3;
+
+			for (let attempt = 1; attempt <= maxRetries; attempt++) {
+				try {
+					await uploadFile(finalName, f, targetPath);
+					success = true;
+					break; // Success! Break out of the retry loop
+				} catch (err: any) {
+					lastError = err;
+					console.warn(
+						`Upload failed for ${finalName} (Attempt ${attempt}/${maxRetries}). Retrying...`,
+					);
+					// If we get a 503, wait 2 seconds before trying again to let the server recover
+					await new Promise((r) => setTimeout(r, 2000));
+				}
+			}
+
+			// If it still fails after 3 attempts, we MUST throw an error so the manga isn't missing pages
+			if (!success) {
+				throw new Error(`Failed to upload ${finalName} after ${maxRetries} attempts.`);
+			}
+
+			// Add a tiny 50ms breather between successful files to prevent rate-limiting
+			await new Promise((r) => setTimeout(r, 50));
 		} catch (e: any) {
 			console.error(e);
+			// Mark the job as error and STOP the loop so you know exactly which manga broke
+			if (isJobAlive(jobId)) {
+				updateItem(jobId, { status: "error", message: e.message || "Upload failed" });
+			}
+			return; // Critically stops the batch so it doesn't continue with missing pages!
 		}
 	}
+
 	if (isJobAlive(jobId)) updateItem(jobId, { status: "done", message: "Completed" });
 }
 

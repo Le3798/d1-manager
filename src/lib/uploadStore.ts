@@ -210,6 +210,9 @@ async function processBatch(jobId: string, files: File[], path: string) {
 			message: `Uploading page ${i + 1}/${files.length}...`,
 		});
 
+		// --- THIS IS THE CRITICAL LINE I MISSED! ---
+		const relPath = f.webkitRelativePath || f.name;
+
 		let targetPath = path;
 		let finalName = f.name;
 

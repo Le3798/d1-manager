@@ -274,8 +274,14 @@ async function processBatch(jobId: string, files: File[], path: string) {
 			return; // Stop the whole job if a page fundamentally fails
 		}
 
-		// Add a tiny 50ms pause between successful pages
+		// 1. Standard small pause between every file
 		await new Promise((resolve) => setTimeout(resolve, 200));
+
+		// 2. Add a 5-second cooldown every 50 images to prevent WAF blocks and socket exhaustion
+		if (i > 0 && i % 50 === 0) {
+			updateItem(jobId, { message: `Cooling down server (5s)...` });
+			await new Promise((resolve) => setTimeout(resolve, 5000));
+		}
 	}
 
 	if (isJobAlive(jobId)) updateItem(jobId, { status: "done", message: "Completed" });

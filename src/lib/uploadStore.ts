@@ -307,10 +307,10 @@ async function processCBZ(jobId: string, file: File, path: string) {
 				const extractedFile = new File([blob], relativePath, { type: blob.type });
 				files.push(extractedFile);
 			}
-		}
+		} // <-- CLosing the if and for loop properly here
 
 		// Sort them so pages are in order (page_001, page_002, etc.)
-		files.sort((a, b) => naturalSort(a.name, b.name));
+		files.sort(naturalSort); // <-- Passing the file objects directly to naturalSort
 
 		// 3. Pass to the robust batch processor
 		// DO NOT use Promise.all(files.map(...)) here!
